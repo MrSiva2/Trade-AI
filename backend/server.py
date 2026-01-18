@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, BackgroundTasks, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, BackgroundTasks, WebSocket, WebSocketDisconnect, Query
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -340,28 +340,77 @@ async def set_data_folder(folder: FolderPath):
     return {"success": True, "path": str(path)}
 
 @api_router.get("/data/files")
-async def list_csv_files(folder: str = None):
-    """List CSV files in folder"""
+async def list_csv_files(folder: str = None, lightweight: bool = Query(default=False)):
+    """List CSV files in folder
+    
+    Args:
+        folder: Optional folder path to list files from
+        lightweight: If True, skip row counting and column reading for faster loading
+    """
     folder_path = Path(folder) if folder else Path(DATA_FOLDER)
     files = []
     
     if folder_path.exists():
-        for file in folder_path.glob("*.csv"):
-            try:
-                df = pd.read_csv(file, nrows=5)
-                files.append(CSVFileInfo(
-                    name=file.name,
-                    path=str(file),
-                    size=file.stat().st_size,
-                    rows=sum(1 for _ in open(file)) - 1,
-                    columns=list(df.columns)
-                ).model_dump())
-            except Exception as e:
-                files.append(CSVFileInfo(
-                    name=file.name,
-                    path=str(file),
-                    size=file.stat().st_size
-                ).model_dump())
+        # Use os.scandir for faster directory listing (faster than glob)
+        import os
+        try:
+            with os.scandir(folder_path) as entries:
+                for entry in entries:
+                    if entry.is_file() and entry.name.lower().endswith('.csv'):
+                        try:
+                            # Use entry.stat() which is faster than Path.stat()
+                            stat_info = entry.stat()
+                            file_info = {
+                                "name": entry.name,
+                                "path": str(entry.path),
+                                "size": stat_info.st_size
+                            }
+                            
+                            if not lightweight:
+                                # Only read columns and count rows if not in lightweight mode
+                                try:
+                                    # Read only header row for columns (much faster)
+                                    df_header = pd.read_csv(entry.path, nrows=0)
+                                    file_info["columns"] = list(df_header.columns)
+                                    
+                                    # Count rows (this is the slowest operation - only do when needed)
+                                    file_info["rows"] = sum(1 for _ in open(entry.path)) - 1
+                                except Exception:
+                                    pass  # Keep basic info even if reading fails
+                            
+                            files.append(file_info)
+                        except Exception:
+                            # If stat() fails, still try to add basic info
+                            files.append({
+                                "name": entry.name,
+                                "path": str(entry.path),
+                                "size": 0
+                            })
+        except Exception as e:
+            logger.error(f"Error listing files: {e}")
+            # Fallback to glob if scandir fails
+            for file in folder_path.glob("*.csv"):
+                try:
+                    stat_info = file.stat()
+                    file_info = {
+                        "name": file.name,
+                        "path": str(file),
+                        "size": stat_info.st_size
+                    }
+                    if not lightweight:
+                        try:
+                            df_header = pd.read_csv(file, nrows=0)
+                            file_info["columns"] = list(df_header.columns)
+                            file_info["rows"] = sum(1 for _ in open(file)) - 1
+                        except Exception:
+                            pass
+                    files.append(file_info)
+                except Exception:
+                    files.append({
+                        "name": file.name,
+                        "path": str(file),
+                        "size": 0
+                    })
     
     return {"files": files}
 
@@ -401,8 +450,12 @@ async def get_prebuilt_models():
 @api_router.get("/models/custom")
 async def get_custom_models():
     """Get list of custom models"""
-    models = await db.custom_models.find({}, {"_id": 0}).to_list(100)
-    return {"models": models}
+    try:
+        models = await db.custom_models.find({}, {"_id": 0}).to_list(100)
+        return {"models": models}
+    except Exception as e:
+        logger.error(f"MongoDB error in get_custom_models: {e}")
+        return {"models": []}
 
 @api_router.post("/models/custom")
 async def create_custom_model(config: CustomModelConfig):
@@ -428,14 +481,20 @@ async def get_saved_models():
     
     if model_path.exists():
         for file in model_path.glob("*_model.joblib"):
-            session_id = file.stem.replace("_model", "")
-            models.append({
-                "id": session_id,
-                "path": str(file),
-                "name": file.name,
-                "size": file.stat().st_size,
-                "created_at": datetime.fromtimestamp(file.stat().st_mtime).isoformat()
-            })
+            try:
+                # Cache stat() call to avoid calling it twice
+                stat_info = file.stat()
+                session_id = file.stem.replace("_model", "")
+                models.append({
+                    "id": session_id,
+                    "path": str(file),
+                    "name": file.name,
+                    "size": stat_info.st_size,
+                    "created_at": datetime.fromtimestamp(stat_info.st_mtime).isoformat()
+                })
+            except Exception:
+                # Skip files that can't be accessed
+                continue
     
     return {"models": models}
 
@@ -559,13 +618,28 @@ async def get_model_output(session_id: str):
 async def get_all_sessions():
     """Get all training sessions"""
     sessions = list(training_sessions.values())
-    db_sessions = await db.training_sessions.find({}, {"_id": 0}).to_list(100)
-    
-    # Merge, avoiding duplicates
-    session_ids = {s["id"] for s in sessions}
-    for db_session in db_sessions:
-        if db_session["id"] not in session_ids:
-            sessions.append(db_session)
+    try:
+        # Limit fields returned for faster queries - exclude large metrics data for list view
+        projection = {
+            "_id": 0,
+            "id": 1,
+            "model_id": 1,
+            "status": 1,
+            "current_epoch": 1,
+            "total_epochs": 1,
+            "started_at": 1,
+            "completed_at": 1
+        }
+        db_sessions = await db.training_sessions.find({}, projection).sort("started_at", -1).limit(100).to_list(100)
+        
+        # Merge, avoiding duplicates
+        session_ids = {s["id"] for s in sessions}
+        for db_session in db_sessions:
+            if db_session["id"] not in session_ids:
+                sessions.append(db_session)
+    except Exception as e:
+        logger.error(f"MongoDB error in get_all_sessions: {e}")
+        # Continue with in-memory sessions only
     
     return {"sessions": sessions}
 
@@ -719,8 +793,25 @@ async def run_backtest(request: BacktestRequest):
 @api_router.get("/backtest/results")
 async def get_backtest_results():
     """Get all backtest results"""
-    results = await db.backtest_results.find({}, {"_id": 0}).to_list(100)
-    return {"results": results}
+    try:
+        # Only return essential fields for list view - exclude large fields like trades and price_data
+        projection = {
+            "_id": 0,
+            "id": 1,
+            "model_id": 1,
+            "total_trades": 1,
+            "winning_trades": 1,
+            "losing_trades": 1,
+            "total_return": 1,
+            "sharpe_ratio": 1,
+            "max_drawdown": 1,
+            "created_at": 1
+        }
+        results = await db.backtest_results.find({}, projection).sort("created_at", -1).limit(100).to_list(100)
+        return {"results": results}
+    except Exception as e:
+        logger.error(f"MongoDB error in get_backtest_results: {e}")
+        return {"results": []}
 
 @api_router.get("/backtest/result/{result_id}")
 async def get_backtest_result(result_id: str):
@@ -735,17 +826,70 @@ async def get_backtest_result(result_id: str):
 async def get_dashboard_stats():
     """Get dashboard statistics"""
     total_models = len(PREBUILT_MODELS)
-    custom_models = await db.custom_models.count_documents({})
-    training_sessions_count = len(training_sessions) + await db.training_sessions.count_documents({})
-    backtest_count = await db.backtest_results.count_documents({})
+    
+    # Default values in case MongoDB is unavailable
+    custom_models = 0
+    training_sessions_db = 0
+    backtest_count = 0
+    latest_backtest = None
+    
+    try:
+        # Run MongoDB queries in parallel for better performance
+        custom_models_task = db.custom_models.count_documents({})
+        training_sessions_db_task = db.training_sessions.count_documents({})
+        backtest_count_task = db.backtest_results.count_documents({})
+        
+        # Get latest backtest with limited fields (exclude large data)
+        latest_backtest_task = db.backtest_results.find_one(
+            {}, 
+            {
+                "_id": 0,
+                "id": 1,
+                "model_id": 1,
+                "total_trades": 1,
+                "winning_trades": 1,
+                "losing_trades": 1,
+                "total_return": 1,
+                "sharpe_ratio": 1,
+                "max_drawdown": 1,
+                "created_at": 1
+            },
+            sort=[("created_at", -1)]
+        )
+        
+        # Wait for all queries to complete
+        custom_models, training_sessions_db, backtest_count, latest_backtest = await asyncio.gather(
+            custom_models_task,
+            training_sessions_db_task,
+            backtest_count_task,
+            latest_backtest_task,
+            return_exceptions=True
+        )
+        
+        # Handle exceptions from gather
+        if isinstance(custom_models, Exception):
+            logger.warning(f"MongoDB error getting custom_models: {custom_models}")
+            custom_models = 0
+        if isinstance(training_sessions_db, Exception):
+            logger.warning(f"MongoDB error getting training_sessions: {training_sessions_db}")
+            training_sessions_db = 0
+        if isinstance(backtest_count, Exception):
+            logger.warning(f"MongoDB error getting backtest_count: {backtest_count}")
+            backtest_count = 0
+        if isinstance(latest_backtest, Exception):
+            logger.warning(f"MongoDB error getting latest_backtest: {latest_backtest}")
+            latest_backtest = None
+            
+    except Exception as e:
+        logger.error(f"MongoDB connection error in get_dashboard_stats: {e}")
+        # Continue with default values
+    
+    training_sessions_count = len(training_sessions) + training_sessions_db
     
     # Get latest training metrics
     latest_session = None
     if training_sessions:
         latest_session = list(training_sessions.values())[-1]
-    
-    # Get latest backtest
-    latest_backtest = await db.backtest_results.find_one({}, {"_id": 0}, sort=[("created_at", -1)])
     
     return {
         "total_models": total_models + custom_models,

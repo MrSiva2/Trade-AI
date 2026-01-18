@@ -97,7 +97,7 @@ const Training = () => {
     try {
       const [modelsRes, filesRes, sessionsRes] = await Promise.all([
         axios.get(`${API}/models/prebuilt`),
-        axios.get(`${API}/data/files`),
+        axios.get(`${API}/data/files`, { params: { lightweight: true } }),
         axios.get(`${API}/training/sessions`)
       ]);
       setModels(modelsRes.data.models || []);

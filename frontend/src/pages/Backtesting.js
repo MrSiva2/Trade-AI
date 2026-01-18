@@ -80,7 +80,7 @@ const Backtesting = () => {
     try {
       const [modelsRes, filesRes, resultsRes] = await Promise.all([
         axios.get(`${API}/models/saved`),
-        axios.get(`${API}/data/files`),
+        axios.get(`${API}/data/files`, { params: { lightweight: true } }),
         axios.get(`${API}/backtest/results`)
       ]);
       setSavedModels(modelsRes.data.models || []);
