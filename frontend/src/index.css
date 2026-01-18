@@ -1,0 +1,296 @@
+@import url('https://fonts.googleapis.com/css2?family=Chivo:wght@700;900&family=JetBrains+Mono:wght@400;500&family=Manrope:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+    --background: 240 6% 4%;
+    --foreground: 0 0% 98%;
+    --card: 240 6% 9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 240 6% 9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 239 84% 67%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 5% 17%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 5% 17%;
+    --muted-foreground: 240 5% 65%;
+    --accent: 240 5% 17%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 4% 20%;
+    --input: 240 4% 20%;
+    --ring: 239 84% 67%;
+    --radius: 0.375rem;
+    
+    /* Trading colors */
+    --trading-buy: 142 71% 45%;
+    --trading-sell: 0 84% 60%;
+    --trading-neutral: 240 5% 45%;
+    
+    /* Accents */
+    --neon-blue: 187 92% 43%;
+    --neon-purple: 292 91% 57%;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Manrope', -apple-system, BlinkMacSystemFont, sans-serif;
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    min-height: 100vh;
+}
+
+/* Typography */
+h1, h2, h3, h4, h5, h6 {
+    font-family: 'Chivo', sans-serif;
+    font-weight: 700;
+    letter-spacing: -0.025em;
+}
+
+.font-mono {
+    font-family: 'JetBrains Mono', monospace !important;
+    font-variant-numeric: tabular-nums;
+}
+
+code, pre, .mono-data {
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: hsl(var(--background));
+}
+
+::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground));
+}
+
+/* Custom animations */
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes slideUp {
+    from { 
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to { 
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes pulse-glow {
+    0%, 100% {
+        box-shadow: 0 0 5px hsl(var(--primary) / 0.5);
+    }
+    50% {
+        box-shadow: 0 0 20px hsl(var(--primary) / 0.8);
+    }
+}
+
+.animate-fade-in {
+    animation: fadeIn 0.3s ease-out;
+}
+
+.animate-slide-up {
+    animation: slideUp 0.4s ease-out;
+}
+
+.animate-pulse-glow {
+    animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* Glass effect */
+.glass {
+    background: hsl(var(--card) / 0.7);
+    backdrop-filter: blur(16px);
+    border: 1px solid hsl(var(--border) / 0.5);
+}
+
+/* Glow border */
+.glow-border {
+    position: relative;
+}
+
+.glow-border::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    background: linear-gradient(to right, hsl(var(--primary)), hsl(var(--neon-purple)));
+    border-radius: inherit;
+    z-index: -1;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.glow-border:hover::before {
+    opacity: 1;
+}
+
+/* Trading specific */
+.trading-positive {
+    color: hsl(var(--trading-buy));
+}
+
+.trading-negative {
+    color: hsl(var(--trading-sell));
+}
+
+.trading-neutral {
+    color: hsl(var(--trading-neutral));
+}
+
+/* Card hover effect */
+.card-hover {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.card-hover:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+}
+
+/* Grid borders (dashboard style) */
+.grid-bordered > * {
+    border-right: 1px solid hsl(var(--border));
+    border-bottom: 1px solid hsl(var(--border));
+}
+
+.grid-bordered > *:nth-child(4n) {
+    border-right: none;
+}
+
+/* Noise texture overlay */
+.noise-overlay {
+    position: relative;
+}
+
+.noise-overlay::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+    opacity: 0.03;
+    pointer-events: none;
+}
+
+/* Button styles */
+.btn-primary {
+    background: hsl(var(--primary));
+    color: hsl(var(--primary-foreground));
+    transition: background-color 0.2s ease, transform 0.1s ease;
+}
+
+.btn-primary:hover {
+    background: hsl(239 84% 60%);
+}
+
+.btn-primary:active {
+    transform: scale(0.98);
+}
+
+/* Status indicators */
+.status-running {
+    background: hsl(var(--trading-buy) / 0.2);
+    color: hsl(var(--trading-buy));
+}
+
+.status-completed {
+    background: hsl(var(--neon-blue) / 0.2);
+    color: hsl(var(--neon-blue));
+}
+
+.status-failed {
+    background: hsl(var(--trading-sell) / 0.2);
+    color: hsl(var(--trading-sell));
+}
+
+.status-pending {
+    background: hsl(var(--muted));
+    color: hsl(var(--muted-foreground));
+}
+
+/* Chart container */
+.chart-container {
+    background: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+    border-radius: var(--radius);
+}
+
+/* Log panel */
+.log-entry {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    padding: 0.25rem 0.5rem;
+    border-bottom: 1px solid hsl(var(--border) / 0.3);
+}
+
+.log-entry:last-child {
+    border-bottom: none;
+}
+
+.log-info { color: hsl(var(--muted-foreground)); }
+.log-success { color: hsl(var(--trading-buy)); }
+.log-warning { color: hsl(45 93% 47%); }
+.log-error { color: hsl(var(--trading-sell)); }
+
+/* Tabs active indicator */
+.tab-active {
+    position: relative;
+}
+
+.tab-active::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(to right, hsl(var(--primary)), hsl(var(--neon-purple)));
+}
+
+/* Selection highlight */
+::selection {
+    background: hsl(var(--primary) / 0.4);
+    color: hsl(var(--foreground));
+}
+
+@layer base {
+    * {
+        @apply border-border;
+    }
+    body {
+        @apply bg-background text-foreground;
+    }
+}
+
+@layer base {
+    [data-debug-wrapper="true"] {
+        display: contents !important;
+    }
+}

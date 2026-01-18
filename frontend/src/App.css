@@ -1,0 +1,304 @@
+/* Main App Styles - Trading AI Hub */
+
+/* Sidebar */
+.sidebar {
+    background: hsl(var(--card));
+    border-right: 1px solid hsl(var(--border));
+    width: 240px;
+    min-height: 100vh;
+    position: fixed;
+    left: 0;
+    top: 0;
+    z-index: 40;
+}
+
+.sidebar-collapsed {
+    width: 64px;
+}
+
+.main-content {
+    margin-left: 240px;
+    min-height: 100vh;
+    padding: 1.5rem;
+}
+
+.main-content-collapsed {
+    margin-left: 64px;
+}
+
+/* Nav item */
+.nav-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    color: hsl(var(--muted-foreground));
+    transition: background-color 0.15s ease, color 0.15s ease;
+    border-radius: var(--radius);
+    margin: 0.25rem 0.5rem;
+}
+
+.nav-item:hover {
+    background: hsl(var(--accent));
+    color: hsl(var(--accent-foreground));
+}
+
+.nav-item-active {
+    background: hsl(var(--primary) / 0.15);
+    color: hsl(var(--primary));
+}
+
+.nav-item-active:hover {
+    background: hsl(var(--primary) / 0.2);
+}
+
+/* Dashboard grid */
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: 1rem;
+}
+
+.stat-card {
+    background: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+    border-radius: var(--radius);
+    padding: 1.25rem;
+}
+
+/* Metric display */
+.metric-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1.75rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.metric-label {
+    font-size: 0.75rem;
+    color: hsl(var(--muted-foreground));
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+/* Data table */
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.data-table th {
+    text-align: left;
+    padding: 0.75rem 1rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: hsl(var(--muted-foreground));
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid hsl(var(--border));
+    background: hsl(var(--card));
+}
+
+.data-table td {
+    padding: 0.75rem 1rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.875rem;
+    border-bottom: 1px solid hsl(var(--border) / 0.5);
+}
+
+.data-table tr:hover td {
+    background: hsl(var(--accent) / 0.5);
+}
+
+/* Panel layout */
+.panel {
+    background: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+
+.panel-header {
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid hsl(var(--border));
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.panel-title {
+    font-family: 'Chivo', sans-serif;
+    font-size: 0.875rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.panel-body {
+    padding: 1rem;
+}
+
+/* Progress bar */
+.progress-track {
+    height: 4px;
+    background: hsl(var(--muted));
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(to right, hsl(var(--primary)), hsl(var(--neon-purple)));
+    transition: width 0.3s ease;
+}
+
+/* Training chart area */
+.training-chart {
+    height: 300px;
+    background: hsl(var(--background));
+    border-radius: var(--radius);
+}
+
+/* Trade markers */
+.trade-marker-buy {
+    width: 8px;
+    height: 8px;
+    background: hsl(var(--trading-buy));
+    border-radius: 50%;
+    box-shadow: 0 0 8px hsl(var(--trading-buy));
+}
+
+.trade-marker-sell {
+    width: 8px;
+    height: 8px;
+    background: hsl(var(--trading-sell));
+    border-radius: 50%;
+    box-shadow: 0 0 8px hsl(var(--trading-sell));
+}
+
+/* File browser */
+.file-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.625rem 0.75rem;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+.file-item:hover {
+    background: hsl(var(--accent));
+}
+
+.file-item-selected {
+    background: hsl(var(--primary) / 0.15);
+    border: 1px solid hsl(var(--primary) / 0.3);
+}
+
+/* Output panel */
+.output-panel {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    background: hsl(240 6% 6%);
+    padding: 1rem;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.output-entry {
+    padding: 0.25rem 0;
+    border-bottom: 1px solid hsl(var(--border) / 0.2);
+}
+
+/* Model card */
+.model-card {
+    background: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+    border-radius: var(--radius);
+    padding: 1rem;
+    cursor: pointer;
+    transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+.model-card:hover {
+    border-color: hsl(var(--primary) / 0.5);
+    transform: translateY(-2px);
+}
+
+.model-card-selected {
+    border-color: hsl(var(--primary));
+    background: hsl(var(--primary) / 0.1);
+}
+
+/* Input styles */
+.input-dark {
+    background: hsl(var(--background));
+    border: 1px solid hsl(var(--border));
+    border-radius: var(--radius);
+    padding: 0.5rem 0.75rem;
+    color: hsl(var(--foreground));
+    font-size: 0.875rem;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.input-dark:focus {
+    outline: none;
+    border-color: hsl(var(--primary));
+    box-shadow: 0 0 0 2px hsl(var(--primary) / 0.2);
+}
+
+/* Badge styles */
+.badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.125rem 0.5rem;
+    font-size: 0.625rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-radius: 9999px;
+}
+
+/* Tooltip */
+.tooltip {
+    position: relative;
+}
+
+.tooltip::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 0.375rem 0.625rem;
+    background: hsl(var(--popover));
+    color: hsl(var(--popover-foreground));
+    font-size: 0.75rem;
+    border-radius: var(--radius);
+    white-space: nowrap;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.15s ease;
+    pointer-events: none;
+}
+
+.tooltip:hover::after {
+    opacity: 1;
+    visibility: visible;
+}
+
+/* Responsive */
+@media (max-width: 1024px) {
+    .sidebar {
+        transform: translateX(-100%);
+    }
+    
+    .sidebar-open {
+        transform: translateX(0);
+    }
+    
+    .main-content {
+        margin-left: 0;
+    }
+}
