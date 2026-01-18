@@ -1,5 +1,50 @@
 /* Main App Styles - Trading AI Hub */
 
+/* Mobile Menu Button */
+.mobile-menu-btn {
+    position: fixed;
+    top: 1rem;
+    left: 1rem;
+    z-index: 50;
+    background: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+    padding: 0.5rem;
+    border-radius: var(--radius);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+.mobile-menu-btn:hover {
+    background: hsl(var(--accent));
+}
+
+@media (max-width: 768px) {
+    .mobile-menu-btn {
+        display: flex;
+    }
+}
+
+/* Sidebar Overlay for Mobile */
+.sidebar-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.7);
+    z-index: 39;
+    animation: fade-in 0.2s ease;
+}
+
+@keyframes fade-in {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
 /* Sidebar */
 .sidebar {
     background: hsl(var(--card));
@@ -10,20 +55,51 @@
     left: 0;
     top: 0;
     z-index: 40;
+    transition: transform 0.3s ease;
 }
 
 .sidebar-collapsed {
     width: 64px;
 }
 
+/* Mobile Sidebar States */
+@media (max-width: 768px) {
+    .sidebar {
+        transform: translateX(-100%);
+        z-index: 50;
+    }
+    
+    .sidebar-mobile-open {
+        transform: translateX(0);
+    }
+    
+    .sidebar-collapsed {
+        width: 240px; /* Force full width on mobile even when collapsed */
+    }
+}
+
 .main-content {
     margin-left: 240px;
     min-height: 100vh;
     padding: 1.5rem;
+    transition: margin-left 0.3s ease;
 }
 
 .main-content-collapsed {
     margin-left: 64px;
+}
+
+/* Mobile Main Content */
+@media (max-width: 768px) {
+    .main-content {
+        margin-left: 0;
+        padding: 1rem;
+        padding-top: 4rem; /* Space for mobile menu button */
+    }
+    
+    .main-content-collapsed {
+        margin-left: 0;
+    }
 }
 
 /* Nav item */

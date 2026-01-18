@@ -16,6 +16,13 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Progress } from "../components/ui/progress";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui/select";
+import {
   LineChart,
   Line,
   XAxis,
@@ -24,25 +31,48 @@ import {
   Tooltip,
   ResponsiveContainer,
   AreaChart,
-  Area
+  Area,
+  BarChart,
+  Bar
 } from "recharts";
 
 const Dashboard = () => {
   const [stats, setStats] = useState(null);
+  const [sessions, setSessions] = useState([]);
+  const [selectedSession, setSelectedSession] = useState(null);
+  const [modelPerformance, setModelPerformance] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchStats();
-    const interval = setInterval(fetchStats, 5000);
+    fetchDashboardData();
+    const interval = setInterval(fetchDashboardData, 5000);
     return () => clearInterval(interval);
   }, []);
 
-  const fetchStats = async () => {
+  const fetchDashboardData = async () => {
     try {
-      const response = await axios.get(`${API}/dashboard/stats`);
-      setStats(response.data);
+      const [statsRes, sessionsRes, performanceRes] = await Promise.all([
+        axios.get(`${API}/dashboard/stats`),
+        axios.get(`${API}/training/sessions`),
+        axios.get(`${API}/dashboard/model-performance`)
+      ]);
+      
+      setStats(statsRes.data);
+      setSessions(sessionsRes.data.sessions || []);
+      setModelPerformance(performanceRes.data.performance || []);
+      
+      // Auto-select first session (running or most recent)
+      if (!selectedSession && sessionsRes.data.sessions?.length > 0) {
+        setSelectedSession(sessionsRes.data.sessions[0]);
+      } else if (selectedSession) {
+        // Update selected session with latest data
+        const updated = sessionsRes.data.sessions?.find(s => s.id === selectedSession.id);
+        if (updated) {
+          setSelectedSession(updated);
+        }
+      }
     } catch (error) {
-      console.error("Failed to fetch stats:", error);
+      console.error("Failed to fetch dashboard data:", error);
     } finally {
       setLoading(false);
     }
@@ -142,25 +172,63 @@ const Dashboard = () => {
         {/* Training Progress Chart */}
         <Card className="panel" data-testid="training-chart-panel">
           <CardHeader className="panel-header">
-            <CardTitle className="panel-title">Training Progress</CardTitle>
-            {stats?.latest_session && (
-              <span className={`badge ${
-                stats.latest_session.status === "running" ? "status-running" :
-                stats.latest_session.status === "completed" ? "status-completed" :
-                stats.latest_session.status === "failed" ? "status-failed" : "status-pending"
-              }`}>
-                {stats.latest_session.status}
-              </span>
-            )}
+            <div className="flex items-center justify-between w-full">
+              <CardTitle className="panel-title">Training Progress</CardTitle>
+              <div className="flex items-center gap-2">
+                {selectedSession && (
+                  <span className={`badge ${
+                    selectedSession.status === "running" ? "status-running" :
+                    selectedSession.status === "completed" ? "status-completed" :
+                    selectedSession.status === "failed" ? "status-failed" : "status-pending"
+                  }`}>
+                    {selectedSession.status}
+                  </span>
+                )}
+              </div>
+            </div>
           </CardHeader>
           <CardContent className="p-4">
+            {/* Training Session Selector */}
+            {sessions.length > 0 && (
+              <div className="mb-4">
+                <Select
+                  value={selectedSession?.id}
+                  onValueChange={(id) => {
+                    const session = sessions.find(s => s.id === id);
+                    setSelectedSession(session);
+                  }}
+                >
+                  <SelectTrigger className="w-full" data-testid="session-selector">
+                    <SelectValue placeholder="Select training session" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {sessions.map((session) => (
+                      <SelectItem key={session.id} value={session.id}>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-xs">{session.model_id?.slice(0, 8)}</span>
+                          <span className="text-xs">
+                            {session.status === "running" && "🟢"}
+                            {session.status === "completed" && "✓"}
+                            {session.status === "failed" && "✗"}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            {session.current_epoch}/{session.total_epochs} epochs
+                          </span>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            
             <div className="h-[250px]">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={stats?.latest_session?.metrics?.loss?.length > 0 
-                  ? stats.latest_session.metrics.loss.map((loss, i) => ({
+                <AreaChart data={selectedSession?.metrics?.loss?.length > 0 
+                  ? selectedSession.metrics.loss.map((loss, i) => ({
                       epoch: i + 1,
                       loss,
-                      accuracy: stats.latest_session.metrics.accuracy?.[i] || 0
+                      accuracy: selectedSession.metrics.accuracy?.[i] || 0
                     }))
                   : mockTrainingData
                 }>
@@ -209,16 +277,16 @@ const Dashboard = () => {
                 </AreaChart>
               </ResponsiveContainer>
             </div>
-            {stats?.latest_session && (
+            {selectedSession && (
               <div className="mt-4">
                 <div className="flex justify-between text-sm mb-2">
                   <span className="text-muted-foreground">Progress</span>
                   <span className="font-mono">
-                    {stats.latest_session.current_epoch}/{stats.latest_session.total_epochs}
+                    {selectedSession.current_epoch}/{selectedSession.total_epochs}
                   </span>
                 </div>
                 <Progress 
-                  value={(stats.latest_session.current_epoch / stats.latest_session.total_epochs) * 100} 
+                  value={(selectedSession.current_epoch / selectedSession.total_epochs) * 100} 
                 />
               </div>
             )}
@@ -298,6 +366,67 @@ const Dashboard = () => {
           </CardContent>
         </Card>
       </div>
+
+      {/* Model Performance Section */}
+      {modelPerformance.length > 0 && (
+        <Card className="panel" data-testid="model-performance-panel">
+          <CardHeader className="panel-header">
+            <CardTitle className="panel-title">Model Performance Comparison</CardTitle>
+          </CardHeader>
+          <CardContent className="p-4">
+            <div className="h-[300px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={modelPerformance}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(240 4% 20%)" />
+                  <XAxis 
+                    dataKey="model_id" 
+                    stroke="hsl(240 5% 45%)" 
+                    tick={{ fill: 'hsl(240 5% 65%)', fontSize: 10 }}
+                    tickFormatter={(value) => value.slice(0, 8)}
+                  />
+                  <YAxis 
+                    stroke="hsl(240 5% 45%)" 
+                    tick={{ fill: 'hsl(240 5% 65%)', fontSize: 11 }}
+                    label={{ value: 'Return (%)', angle: -90, position: 'insideLeft', fill: 'hsl(240 5% 65%)' }}
+                  />
+                  <Tooltip 
+                    contentStyle={{
+                      background: 'hsl(240 6% 9%)',
+                      border: '1px solid hsl(240 4% 20%)',
+                      borderRadius: '6px',
+                      color: 'hsl(0 0% 98%)'
+                    }}
+                    formatter={(value, name) => {
+                      if (name === 'avg_return') return [`${value}%`, 'Avg Return'];
+                      if (name === 'max_return') return [`${value}%`, 'Max Return'];
+                      if (name === 'min_return') return [`${value}%`, 'Min Return'];
+                      return [value, name];
+                    }}
+                  />
+                  <Bar dataKey="avg_return" fill="#6366f1" name="Avg Return" />
+                  <Bar dataKey="max_return" fill="#22c55e" name="Max Return" />
+                  <Bar dataKey="min_return" fill="#ef4444" name="Min Return" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-4">
+              {modelPerformance.slice(0, 4).map((perf) => (
+                <div key={perf.model_id} className="text-center p-3 bg-accent rounded-md">
+                  <p className="text-xs text-muted-foreground font-mono mb-1">
+                    {perf.model_id.slice(0, 8)}
+                  </p>
+                  <p className={`text-lg font-bold ${perf.avg_return >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                    {perf.avg_return >= 0 ? '+' : ''}{perf.avg_return}%
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Win Rate: {perf.win_rate}%
+                  </p>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Quick Actions */}
       <Card className="panel" data-testid="quick-actions-panel">

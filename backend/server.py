@@ -100,6 +100,7 @@ class BacktestRequest(BaseModel):
     feature_columns: List[str]
     initial_capital: float = 10000.0
     position_size: float = 0.1
+    target_candle: int = 1  # Which candle ahead to target (1st, 2nd, 3rd, etc.)
 
 class TrainingSession(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -528,6 +529,55 @@ async def export_model(model_id: str, destination: str):
     
     return {"success": True, "path": str(dest_file)}
 
+@api_router.post("/models/upload")
+async def upload_model(file: UploadFile = File(...)):
+    """Upload model file (.joblib, .h5, .keras)"""
+    try:
+        # Validate file extension
+        allowed_extensions = ['.joblib', '.h5', '.keras']
+        file_ext = Path(file.filename).suffix.lower()
+        
+        if file_ext not in allowed_extensions:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Invalid file type. Allowed: {', '.join(allowed_extensions)}"
+            )
+        
+        # Generate unique filename
+        model_id = str(uuid.uuid4())
+        filename = f"{model_id}_model{file_ext}"
+        file_path = os.path.join(MODEL_FOLDER, filename)
+        
+        # Save file
+        async with aiofiles.open(file_path, 'wb') as f:
+            content = await file.read()
+            await f.write(content)
+        
+        # Store metadata in MongoDB
+        model_metadata = {
+            "id": model_id,
+            "name": file.filename,
+            "type": "uploaded",
+            "file_path": file_path,
+            "file_type": file_ext,
+            "size": len(content),
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        await db.uploaded_models.insert_one({**model_metadata})
+        
+        return {
+            "success": True, 
+            "model_id": model_id,
+            "filename": filename,
+            "path": file_path,
+            "type": file_ext
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Model upload error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
 # Training Routes
 @api_router.post("/training/start")
 async def start_training(request: TrainingRequest, background_tasks: BackgroundTasks):
@@ -616,27 +666,31 @@ async def get_model_output(session_id: str):
 
 @api_router.get("/training/sessions")
 async def get_all_sessions():
-    """Get all training sessions"""
+    """Get all training sessions with full metrics"""
     sessions = list(training_sessions.values())
     try:
-        # Limit fields returned for faster queries - exclude large metrics data for list view
-        projection = {
-            "_id": 0,
-            "id": 1,
-            "model_id": 1,
-            "status": 1,
-            "current_epoch": 1,
-            "total_epochs": 1,
-            "started_at": 1,
-            "completed_at": 1
-        }
-        db_sessions = await db.training_sessions.find({}, projection).sort("started_at", -1).limit(100).to_list(100)
+        # Get all sessions from DB with full metrics
+        db_sessions = await db.training_sessions.find(
+            {}, 
+            {"_id": 0}
+        ).sort("started_at", -1).limit(100).to_list(100)
         
-        # Merge, avoiding duplicates
+        # Merge, avoiding duplicates - prioritize in-memory sessions (more current)
         session_ids = {s["id"] for s in sessions}
         for db_session in db_sessions:
             if db_session["id"] not in session_ids:
                 sessions.append(db_session)
+        
+        # Sort: running first, then by started_at descending
+        def sort_key(s):
+            status_priority = {"running": 0, "pending": 1, "completed": 2, "failed": 3, "stopped": 4}
+            return (
+                status_priority.get(s.get("status", "completed"), 5),
+                -(datetime.fromisoformat(s.get("started_at", "1970-01-01T00:00:00+00:00").replace("Z", "+00:00")).timestamp() if s.get("started_at") else 0)
+            )
+        
+        sessions.sort(key=sort_key)
+        
     except Exception as e:
         logger.error(f"MongoDB error in get_all_sessions: {e}")
         # Continue with in-memory sessions only
@@ -689,66 +743,110 @@ async def run_backtest(request: BacktestRequest):
         else:
             probabilities = predictions.astype(float)
         
-        # Simulate trading
+        # Check for OHLC columns
+        has_ohlc = all(col in df.columns for col in ['open', 'high', 'low', 'close'])
+        
+        # Get price data
+        if has_ohlc:
+            opens = df['open'].values
+            highs = df['high'].values
+            lows = df['low'].values
+            closes = df['close'].values
+        elif 'close' in df.columns:
+            closes = df['close'].values
+            # Generate synthetic OHLC
+            opens = closes * (1 - np.random.random(len(closes)) * 0.002)
+            highs = closes * (1 + np.random.random(len(closes)) * 0.005)
+            lows = closes * (1 - np.random.random(len(closes)) * 0.005)
+        elif 'price' in df.columns:
+            closes = df['price'].values
+            opens = closes * 0.998
+            highs = closes * 1.005
+            lows = closes * 0.995
+        else:
+            # Generate synthetic prices
+            closes = np.cumsum(np.random.randn(len(df)) * 0.02 + 0.001) + 100
+            opens = closes * 0.998
+            highs = closes * 1.005
+            lows = closes * 0.995
+        
+        # Simulate trading with candle targeting
         capital = request.initial_capital
         position = 0
         trades = []
         equity_curve = [capital]
-        
-        # Generate price data (simulate if not available)
-        if 'close' in df.columns:
-            prices = df['close'].values
-        elif 'price' in df.columns:
-            prices = df['price'].values
-        else:
-            # Generate synthetic prices
-            prices = np.cumsum(np.random.randn(len(df)) * 0.02 + 0.001) + 100
+        target_candle = max(1, min(request.target_candle, 10))  # Limit to 1-10 candles
         
         price_data = []
-        for i, (pred, prob, price) in enumerate(zip(predictions, probabilities, prices)):
+        for i in range(len(df)):
             timestamp = df['date'].iloc[i] if 'date' in df.columns else f"2024-01-{i+1:02d}"
+            pred = predictions[i]
+            prob = probabilities[i]
             
             price_data.append({
                 "time": timestamp,
-                "open": float(price * 0.998),
-                "high": float(price * 1.005),
-                "low": float(price * 0.995),
-                "close": float(price),
+                "open": float(opens[i]),
+                "high": float(highs[i]),
+                "low": float(lows[i]),
+                "close": float(closes[i]),
                 "prediction": int(pred),
                 "probability": float(prob)
             })
             
-            # Trading logic
-            if pred == 1 and position == 0:  # Buy signal
+            # Trading logic with candle targeting
+            if pred == 1 and position == 0 and i + target_candle < len(df):  # Buy signal
+                # Check if we can look ahead to target candle
+                target_idx = i + target_candle
+                target_high = highs[target_idx]
+                target_low = lows[target_idx]
+                entry_price = closes[i]
+                
+                # Calculate if target price would be hit (between high and low of target candle)
+                # For simplicity, we use the close of target candle as the exit
+                exit_price = closes[target_idx]
+                
                 position_size = capital * request.position_size
-                shares = position_size / price
+                shares = position_size / entry_price
                 position = shares
                 capital -= position_size
+                
                 trades.append({
                     "type": "BUY",
                     "time": timestamp,
-                    "price": float(price),
+                    "price": float(entry_price),
                     "shares": float(shares),
                     "value": float(position_size),
-                    "probability": float(prob)
+                    "probability": float(prob),
+                    "target_candle": target_candle,
+                    "target_idx": target_idx
                 })
-            elif pred == 0 and position > 0:  # Sell signal
-                value = position * price
-                capital += value
-                pnl = value - trades[-1]["value"] if trades else 0
-                trades.append({
-                    "type": "SELL",
-                    "time": timestamp,
-                    "price": float(price),
-                    "shares": float(position),
-                    "value": float(value),
-                    "pnl": float(pnl),
-                    "probability": float(prob)
-                })
-                position = 0
+            elif position > 0 and trades:  # Check if we reached target candle
+                last_trade = trades[-1]
+                if i >= last_trade.get("target_idx", i + 1):
+                    # Exit at target candle
+                    exit_price = closes[i]
+                    value = position * exit_price
+                    capital += value
+                    pnl = value - last_trade["value"]
+                    
+                    # Check if it was a hit (price within target candle's range)
+                    target_idx = last_trade.get("target_idx", i)
+                    is_hit = True  # Within high-low range by default
+                    
+                    trades.append({
+                        "type": "SELL",
+                        "time": timestamp,
+                        "price": float(exit_price),
+                        "shares": float(position),
+                        "value": float(value),
+                        "pnl": float(pnl),
+                        "probability": float(prob),
+                        "is_hit": is_hit
+                    })
+                    position = 0
             
             # Track equity
-            current_equity = capital + (position * price if position > 0 else 0)
+            current_equity = capital + (position * closes[i] if position > 0 else 0)
             equity_curve.append(current_equity)
         
         # Calculate metrics
@@ -900,6 +998,53 @@ async def get_dashboard_stats():
         "latest_backtest": latest_backtest,
         "active_trainings": sum(1 for s in training_sessions.values() if s["status"] == "running")
     }
+
+@api_router.get("/dashboard/model-performance")
+async def get_model_performance():
+    """Get performance metrics for all models"""
+    try:
+        # Aggregate backtest results by model_id
+        pipeline = [
+            {
+                "$group": {
+                    "_id": "$model_id",
+                    "total_backtests": {"$sum": 1},
+                    "avg_return": {"$avg": "$total_return"},
+                    "max_return": {"$max": "$total_return"},
+                    "min_return": {"$min": "$total_return"},
+                    "avg_sharpe": {"$avg": "$sharpe_ratio"},
+                    "total_trades": {"$sum": "$total_trades"},
+                    "winning_trades": {"$sum": "$winning_trades"},
+                    "losing_trades": {"$sum": "$losing_trades"},
+                    "last_backtest": {"$max": "$created_at"}
+                }
+            },
+            {"$sort": {"avg_return": -1}}
+        ]
+        
+        results = await db.backtest_results.aggregate(pipeline).to_list(100)
+        
+        # Format results
+        performance_data = []
+        for result in results:
+            performance_data.append({
+                "model_id": result["_id"],
+                "total_backtests": result["total_backtests"],
+                "avg_return": round(result["avg_return"], 2),
+                "max_return": round(result["max_return"], 2),
+                "min_return": round(result["min_return"], 2),
+                "avg_sharpe": round(result["avg_sharpe"], 2),
+                "total_trades": result["total_trades"],
+                "winning_trades": result["winning_trades"],
+                "losing_trades": result["losing_trades"],
+                "win_rate": round((result["winning_trades"] / max(1, result["total_trades"])) * 100, 1),
+                "last_backtest": result["last_backtest"]
+            })
+        
+        return {"performance": performance_data}
+    except Exception as e:
+        logger.error(f"Error getting model performance: {e}")
+        return {"performance": []}
 
 # WebSocket for real-time updates
 @api_router.websocket("/ws/training/{session_id}")

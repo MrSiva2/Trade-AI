@@ -66,7 +66,8 @@ const Backtesting = () => {
     target_column: "",
     feature_columns: [],
     initial_capital: 10000,
-    position_size: 0.1
+    position_size: 0.1,
+    target_candle: 1
   });
 
   const [availableColumns, setAvailableColumns] = useState([]);
@@ -282,6 +283,28 @@ const Backtesting = () => {
             </div>
 
             {/* Trading Parameters */}
+            <div className="space-y-2">
+              <Label>Target Candle</Label>
+              <Select
+                value={config.target_candle.toString()}
+                onValueChange={(v) => setConfig({ ...config, target_candle: parseInt(v) })}
+              >
+                <SelectTrigger data-testid="target-candle-select">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((num) => (
+                    <SelectItem key={num} value={num.toString()}>
+                      {num === 1 ? '1st' : num === 2 ? '2nd' : num === 3 ? '3rd' : `${num}th`} Candle
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Target candle for hit detection (within OHLC range)
+              </p>
+            </div>
+
             <div className="space-y-2">
               <Label>Initial Capital</Label>
               <Input

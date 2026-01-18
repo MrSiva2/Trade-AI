@@ -42,6 +42,7 @@ const ModelManagement = () => {
   const [savedModels, setSavedModels] = useState([]);
   const [selectedModel, setSelectedModel] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [importPath, setImportPath] = useState("");
@@ -77,6 +78,36 @@ const ModelManagement = () => {
       toast.error("Failed to fetch models");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleModelUpload = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const allowedExtensions = ['.joblib', '.h5', '.keras'];
+    const fileExt = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+    
+    if (!allowedExtensions.includes(fileExt)) {
+      toast.error(`Invalid file type. Allowed: ${allowedExtensions.join(', ')}`);
+      return;
+    }
+
+    setUploading(true);
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const response = await axios.post(`${API}/models/upload`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      toast.success(`Model uploaded successfully: ${response.data.filename}`);
+      fetchModels();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Failed to upload model");
+    } finally {
+      setUploading(false);
+      event.target.value = ''; // Reset file input
     }
   };
 
@@ -198,6 +229,25 @@ const ModelManagement = () => {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <label>
+            <input
+              type="file"
+              accept=".joblib,.h5,.keras"
+              onChange={handleModelUpload}
+              className="hidden"
+              data-testid="model-upload-input"
+            />
+            <Button asChild variant="outline" disabled={uploading}>
+              <span className="cursor-pointer" data-testid="upload-model-btn">
+                {uploading ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <Upload className="w-4 h-4 mr-2" />
+                )}
+                Upload Model
+              </span>
+            </Button>
+          </label>
           <Button
             variant="outline"
             onClick={() => setShowImportDialog(true)}

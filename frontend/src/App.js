@@ -22,7 +22,9 @@ import {
   Zap,
   TrendingUp,
   TrendingDown,
-  Terminal
+  Terminal,
+  Menu,
+  X
 } from "lucide-react";
 
 import Dashboard from "./pages/Dashboard";
@@ -36,7 +38,7 @@ const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 export const API = `${BACKEND_URL}/api`;
 
 // Sidebar Component
-const Sidebar = ({ collapsed, setCollapsed }) => {
+const Sidebar = ({ collapsed, setCollapsed, mobileOpen, setMobileOpen }) => {
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -49,62 +51,105 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
     { icon: Terminal, label: "Logs", path: "/logs" },
   ];
 
+  const handleNavClick = (path) => {
+    navigate(path);
+    setMobileOpen(false);
+  };
+
   return (
-    <div className={`sidebar ${collapsed ? 'sidebar-collapsed' : ''}`} data-testid="sidebar">
-      <div className="flex flex-col h-full">
-        {/* Logo */}
-        <div className="p-4 border-b border-border flex items-center gap-3">
-          <div className="w-8 h-8 rounded-md bg-primary flex items-center justify-center">
-            <Zap className="w-5 h-5 text-primary-foreground" />
+    <>
+      {/* Mobile Overlay */}
+      {mobileOpen && (
+        <div 
+          className="sidebar-overlay"
+          onClick={() => setMobileOpen(false)}
+          data-testid="sidebar-overlay"
+        />
+      )}
+      
+      {/* Sidebar */}
+      <div 
+        className={`sidebar ${collapsed ? 'sidebar-collapsed' : ''} ${mobileOpen ? 'sidebar-mobile-open' : ''}`} 
+        data-testid="sidebar"
+      >
+        <div className="flex flex-col h-full">
+          {/* Logo */}
+          <div className="p-4 border-b border-border flex items-center gap-3">
+            <div className="w-8 h-8 rounded-md bg-primary flex items-center justify-center">
+              <Zap className="w-5 h-5 text-primary-foreground" />
+            </div>
+            {!collapsed && (
+              <span className="font-bold text-lg tracking-tight">TradeAI</span>
+            )}
+            {/* Mobile close button */}
+            <button
+              onClick={() => setMobileOpen(false)}
+              className="ml-auto md:hidden p-1 hover:bg-accent rounded"
+              data-testid="mobile-close-btn"
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
-          {!collapsed && (
-            <span className="font-bold text-lg tracking-tight">TradeAI</span>
-          )}
+
+          {/* Navigation */}
+          <nav className="flex-1 py-4">
+            {navItems.map((item) => {
+              const isActive = location.pathname === item.path;
+              return (
+                <button
+                  key={item.path}
+                  onClick={() => handleNavClick(item.path)}
+                  className={`nav-item w-full ${isActive ? 'nav-item-active' : ''}`}
+                  data-testid={`nav-${item.label.toLowerCase()}`}
+                >
+                  <item.icon className="w-5 h-5 flex-shrink-0" />
+                  {!collapsed && <span>{item.label}</span>}
+                </button>
+              );
+            })}
+          </nav>
+
+          {/* Collapse button - desktop only */}
+          <button
+            onClick={() => setCollapsed(!collapsed)}
+            className="hidden md:flex p-4 border-t border-border items-center justify-center hover:bg-accent transition-colors"
+            data-testid="sidebar-toggle"
+          >
+            {collapsed ? (
+              <ChevronRight className="w-5 h-5" />
+            ) : (
+              <ChevronLeft className="w-5 h-5" />
+            )}
+          </button>
         </div>
-
-        {/* Navigation */}
-        <nav className="flex-1 py-4">
-          {navItems.map((item) => {
-            const isActive = location.pathname === item.path;
-            return (
-              <button
-                key={item.path}
-                onClick={() => navigate(item.path)}
-                className={`nav-item w-full ${isActive ? 'nav-item-active' : ''}`}
-                data-testid={`nav-${item.label.toLowerCase()}`}
-              >
-                <item.icon className="w-5 h-5 flex-shrink-0" />
-                {!collapsed && <span>{item.label}</span>}
-              </button>
-            );
-          })}
-        </nav>
-
-        {/* Collapse button */}
-        <button
-          onClick={() => setCollapsed(!collapsed)}
-          className="p-4 border-t border-border flex items-center justify-center hover:bg-accent transition-colors"
-          data-testid="sidebar-toggle"
-        >
-          {collapsed ? (
-            <ChevronRight className="w-5 h-5" />
-          ) : (
-            <ChevronLeft className="w-5 h-5" />
-          )}
-        </button>
       </div>
-    </div>
+    </>
   );
 };
 
 // Main App Component
 function App() {
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   return (
     <div className="min-h-screen bg-background noise-overlay">
       <BrowserRouter>
-        <Sidebar collapsed={collapsed} setCollapsed={setCollapsed} />
+        {/* Mobile Menu Button */}
+        <button
+          onClick={() => setMobileOpen(true)}
+          className="mobile-menu-btn"
+          data-testid="mobile-menu-btn"
+        >
+          <Menu className="w-6 h-6" />
+        </button>
+
+        <Sidebar 
+          collapsed={collapsed} 
+          setCollapsed={setCollapsed}
+          mobileOpen={mobileOpen}
+          setMobileOpen={setMobileOpen}
+        />
         <main className={`main-content ${collapsed ? 'main-content-collapsed' : ''}`}>
           <Routes>
             <Route path="/" element={<Dashboard />} />
