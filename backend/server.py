@@ -28,12 +28,15 @@ import queue
 import io
 
 ROOT_DIR = Path(__file__).parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
+    
 load_dotenv(ROOT_DIR / '.env')
 
 # MongoDB connection
-mongo_url = os.environ['MONGO_URL']
+mongo_url = os.environ.get('MONGO_URL', "mongodb://localhost:27017")
 client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+db = client[os.environ.get('DB_NAME', 'test_database')]
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -47,15 +50,26 @@ logger = logging.getLogger(__name__)
 
 # Global state for training sessions and logs
 training_sessions: Dict[str, Dict] = {}
+model_instances: Dict[str, Any] = {}
 log_queues: Dict[str, queue.Queue] = {}
 output_queues: Dict[str, queue.Queue] = {}
 websocket_connections: Dict[str, List[WebSocket]] = {}
 
-# Default data folder
-DATA_FOLDER = os.environ.get('DATA_FOLDER', '/app/data')
-MODEL_FOLDER = os.environ.get('MODEL_FOLDER', '/app/models')
+# Default data folder - use local project relative paths if /app doesn't exist or we are on Windows
+def get_safe_path(env_var, default_rel):
+    val = os.environ.get(env_var)
+    if not val or (val.startswith('/app') and os.name == 'nt'):
+        return str(ROOT_DIR / default_rel)
+    return val
+
+DATA_FOLDER = get_safe_path('DATA_FOLDER', 'data')
+MODEL_FOLDER = get_safe_path('MODEL_FOLDER', 'models')
 PREBUILT_MODELS_FOLDER = ROOT_DIR / 'models' / 'prebuilt'
 SAVED_MODELS_FOLDER = Path(MODEL_FOLDER) / 'saved'
+
+# Fallback for previous Docker-style paths on Windows
+FALLBACK_SAVED_MODELS_FOLDER = Path("C:/app/models/saved") if os.name == 'nt' else None
+FALLBACK_MODEL_FOLDER = Path("C:/app/models") if os.name == 'nt' else None
 
 # Ensure folders exist
 os.makedirs(DATA_FOLDER, exist_ok=True)
@@ -103,6 +117,9 @@ class TrainingRequest(BaseModel):
     batch_size: int = 32
     validation_split: float = 0.2
     nth_candle: Optional[int] = None  # For validation predictions
+
+class SaveModelRequest(BaseModel):
+    name: Optional[str] = None
 
 class BacktestRequest(BaseModel):
     model_id: str
@@ -334,8 +351,8 @@ async def run_training(session_id: str, request: TrainingRequest, model_instance
             
             await asyncio.sleep(0.1)  # Small delay for real-time updates
         
-        # Store model instance in session for later saving
-        training_sessions[session_id]["model_instance"] = model_instance
+        # Store model instance in separate global dict for later saving (not in training_sessions)
+        model_instances[session_id] = model_instance
         training_sessions[session_id]["model_name"] = request.model_name
         training_sessions[session_id]["target_column"] = request.target_column
         training_sessions[session_id]["feature_columns"] = request.feature_columns
@@ -344,15 +361,20 @@ async def run_training(session_id: str, request: TrainingRequest, model_instance
         training_sessions[session_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
         add_log(session_id, "Training completed successfully! Click 'Save Model' to save the trained model.", "SUCCESS")
         
-        # Store in MongoDB
-        await db.training_sessions.update_one(
-            {"id": session_id},
-            {"$set": training_sessions[session_id]},
-            upsert=True
-        )
+        # Store in MongoDB (handle connection errors)
+        try:
+            await db.training_sessions.update_one(
+                {"id": session_id},
+                {"$set": training_sessions[session_id]},
+                upsert=True
+            )
+        except Exception as db_error:
+            logger.error(f"Failed to update MongoDB: {db_error}")
+            add_log(session_id, "Note: Training completed but failed to save status to permanent database. Model is still available to save.", "WARNING")
         
     except Exception as e:
-        training_sessions[session_id]["status"] = "failed"
+        if session_id in training_sessions:
+            training_sessions[session_id]["status"] = "failed"
         add_log(session_id, f"Training failed: {str(e)}", "ERROR")
         logger.error(f"Training error: {e}")
 
@@ -607,13 +629,19 @@ async def get_saved_models():
         metadata_map = {m["id"]: m for m in metadata_list}
         
         # First, check for .py files in saved models folder
-        saved_models_path = SAVED_MODELS_FOLDER
-        if saved_models_path.exists():
-            for file in saved_models_path.glob("*_model.py"):
+        search_paths = [SAVED_MODELS_FOLDER]
+        if FALLBACK_SAVED_MODELS_FOLDER and FALLBACK_SAVED_MODELS_FOLDER.exists():
+            search_paths.append(FALLBACK_SAVED_MODELS_FOLDER)
+            
+        for path in search_paths:
+            for file in path.glob("*_model.py"):
                 try:
                     stat_info = file.stat()
                     session_id = file.stem.replace("_model", "")
                     
+                    if any(m["id"] == session_id for m in models):
+                        continue
+                        
                     meta = metadata_map.get(session_id, {})
                     session_info = training_sessions.get(session_id, {})
                     
@@ -830,11 +858,16 @@ async def start_training(request: TrainingRequest, background_tasks: BackgroundT
         else:
             raise HTTPException(status_code=404, detail=f"Model not found: {str(e)}")
     
+    # Set default model name if not provided
+    model_name = request.model_name
+    if not model_name and model_config:
+        model_name = model_config.get("name", "Unnamed Model")
+    
     # Initialize session
     training_sessions[session_id] = {
         "id": session_id,
         "model_id": request.model_id,
-        "model_name": request.model_name,
+        "model_name": model_name,
         "status": "pending",
         "current_epoch": 0,
         "total_epochs": request.epochs,
@@ -860,12 +893,19 @@ async def get_training_status(session_id: str):
     """Get training session status"""
     if session_id not in training_sessions:
         # Check MongoDB
-        session = await db.training_sessions.find_one({"id": session_id}, {"_id": 0})
-        if session:
-            return session
+        try:
+            session = await db.training_sessions.find_one({"id": session_id}, {"_id": 0})
+            if session:
+                return session
+        except Exception as e:
+            logger.error(f"MongoDB status check failed: {e}")
         raise HTTPException(status_code=404, detail="Session not found")
     
-    return training_sessions[session_id]
+    # Return session without non-serializable fields
+    session_data = training_sessions[session_id].copy()
+    if "model_instance" in session_data:
+        del session_data["model_instance"]
+    return session_data
 
 @api_router.post("/training/stop/{session_id}")
 async def stop_training(session_id: str):
@@ -901,7 +941,7 @@ async def get_model_output(session_id: str):
     return {"outputs": outputs}
 
 @api_router.post("/training/save/{session_id}")
-async def save_trained_model(session_id: str):
+async def save_trained_model(session_id: str, save_request: Optional[SaveModelRequest] = None):
     """Save a trained model after training completes"""
     if session_id not in training_sessions:
         # Check MongoDB
@@ -915,12 +955,14 @@ async def save_trained_model(session_id: str):
     if session.get("status") != "completed":
         raise HTTPException(status_code=400, detail="Model training must be completed before saving")
     
-    if "model_instance" not in session:
-        raise HTTPException(status_code=400, detail="Model instance not found in session")
+    # Check if we have the model instance in memory
+    model_instance = model_instances.get(session_id)
+    if not model_instance:
+        raise HTTPException(status_code=400, detail="Model instance not found in memory. It may have been lost if the server restarted.")
     
     try:
-        model_instance = session["model_instance"]
-        model_name = session.get("model_name") or f"Model_{session_id[:8]}"
+        # Prioritize name from save request, then session name, then default
+        model_name = (save_request.name if save_request and save_request.name else None) or session.get("model_name") or f"Model_{session_id[:8]}"
         target_column = session.get("target_column")
         feature_columns = session.get("feature_columns", [])
         
@@ -1043,31 +1085,48 @@ async def get_all_sessions():
 async def run_backtest(request: BacktestRequest):
     """Run backtesting on a trained model using .py model file"""
     # Try to load from saved models metadata first
-    saved_model = await db.saved_models.find_one({"id": request.model_id}, {"_id": 0})
+    saved_model = None
+    try:
+        saved_model = await db.saved_models.find_one({"id": request.model_id}, {"_id": 0})
+    except Exception as db_error:
+        logger.warning(f"Failed to fetch model metadata from MongoDB: {db_error}. Falling back to file-based lookup.")
     
     model_instance = None
     target_column = None
     feature_columns = None
     
+    # Try to find and load .py file (either from DB metadata or direct check)
+    py_file_path = None
     if saved_model and saved_model.get("file_path"):
-        # Load from .py file
         py_file_path = Path(saved_model["file_path"])
-        if py_file_path.exists():
-            try:
-                spec = importlib.util.spec_from_file_location(f"backtest_model_{request.model_id}", py_file_path)
-                module = importlib.util.module_from_spec(spec)
-                sys.modules[f"backtest_model_{request.model_id}"] = module
-                spec.loader.exec_module(module)
-                
-                # Get model instance from module
-                model_instance = module.model
-                target_column = model_instance.TARGET_COLUMN
-                feature_columns = model_instance.FEATURE_COLUMNS
-            except Exception as e:
-                logger.error(f"Failed to load model from .py file: {e}")
-                raise HTTPException(status_code=500, detail=f"Failed to load model: {str(e)}")
     
-    # Fallback to .joblib if .py not available (backward compatibility)
+    # If not found or doesn't exist, check local current folder
+    if not py_file_path or not py_file_path.exists():
+        py_file_path = SAVED_MODELS_FOLDER / f"{request.model_id}_model.py"
+    
+    # If still not found, check fallback folder
+    if not py_file_path.exists() and FALLBACK_SAVED_MODELS_FOLDER:
+        py_file_path = FALLBACK_SAVED_MODELS_FOLDER / f"{request.model_id}_model.py"
+    
+    if py_file_path and py_file_path.exists():
+        # Load from .py file
+        try:
+            # Use absolute path for importlib
+            py_file_path = py_file_path.absolute()
+            spec = importlib.util.spec_from_file_location(f"backtest_model_{request.model_id}", py_file_path)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[f"backtest_model_{request.model_id}"] = module
+            spec.loader.exec_module(module)
+            
+            # Get model instance from module
+            model_instance = module.model
+            target_column = getattr(model_instance, 'TARGET_COLUMN', None)
+            feature_columns = getattr(model_instance, 'FEATURE_COLUMNS', [])
+        except Exception as e:
+            logger.error(f"Failed to load model from .py file: {e}")
+            # Don't raise yet, try .joblib fallback
+    
+    # Fallback to .joblib if .py loading failed
     if model_instance is None:
         model_path = os.path.join(MODEL_FOLDER, f"{request.model_id}_model.joblib")
         scaler_path = os.path.join(MODEL_FOLDER, f"{request.model_id}_scaler.joblib")
@@ -1282,8 +1341,11 @@ async def run_backtest(request: BacktestRequest):
             price_data=price_data
         )
         
-        # Store in MongoDB
-        await db.backtest_results.insert_one({**result.model_dump()})
+        # Store in MongoDB (handle connection errors)
+        try:
+            await db.backtest_results.insert_one({**result.model_dump()})
+        except Exception as db_error:
+            logger.error(f"Failed to save backtest result to MongoDB: {db_error}")
         
         return result.model_dump()
         
@@ -1317,10 +1379,16 @@ async def get_backtest_results():
 @api_router.get("/backtest/result/{result_id}")
 async def get_backtest_result(result_id: str):
     """Get specific backtest result"""
-    result = await db.backtest_results.find_one({"id": result_id}, {"_id": 0})
-    if not result:
-        raise HTTPException(status_code=404, detail="Result not found")
-    return result
+    try:
+        result = await db.backtest_results.find_one({"id": result_id}, {"_id": 0})
+        if not result:
+            raise HTTPException(status_code=404, detail="Result not found")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"MongoDB error in get_backtest_result: {e}")
+        raise HTTPException(status_code=500, detail="Database connection error")
 
 # Dashboard Stats
 @api_router.get("/dashboard/stats")

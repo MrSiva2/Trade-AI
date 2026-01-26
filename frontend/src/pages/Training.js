@@ -200,7 +200,7 @@ const Training = () => {
     }
 
     try {
-      const response = await axios.post(`${API}/training/save/${activeSession.id}`);
+      const response = await axios.post(`${API}/training/save/${activeSession.id}`, { name: config.model_name });
       toast.success(`Model saved successfully: ${response.data.model_name}`);
       // Refresh data to show saved model
       fetchData();
