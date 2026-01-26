@@ -93,30 +93,51 @@ const DataManagement = () => {
   };
 
   const handleUpload = async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
 
-    if (!file.name.endsWith('.csv')) {
-      toast.error("Please upload a CSV file");
+    const formData = new FormData();
+    let csvCount = 0;
+
+    for (let i = 0; i < files.length; i++) {
+      if (files[i].name.toLowerCase().endsWith('.csv')) {
+        formData.append('files', files[i]);
+        csvCount++;
+      }
+    }
+
+    if (csvCount === 0) {
+      toast.error("No CSV files selected");
       return;
     }
 
     setUploading(true);
-    const formData = new FormData();
-    formData.append('file', file);
-
     try {
-      await axios.post(`${API}/data/upload`, formData, {
+      const response = await axios.post(`${API}/data/upload`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
-      toast.success("File uploaded successfully");
+
+      const { uploaded, failed, count } = response.data;
+
+      if (count > 0) {
+        toast.success(`Successfully uploaded ${count} file${count !== 1 ? 's' : ''}`);
+      }
+
+      if (failed && failed.length > 0) {
+        toast.warning(`Failed to upload ${failed.length} file${failed.length !== 1 ? 's' : ''}`);
+        console.warn("Failed uploads:", failed);
+      }
+
       if (selectedFolder) {
         selectFolder(selectedFolder);
       }
     } catch (error) {
-      toast.error("Failed to upload file");
+      console.error("Upload error:", error);
+      toast.error("Failed to upload files");
     } finally {
       setUploading(false);
+      // Reset input
+      event.target.value = '';
     }
   };
 
@@ -158,10 +179,31 @@ const DataManagement = () => {
             <RefreshCw className="w-4 h-4 mr-2" />
             Refresh
           </Button>
+
+          {/* Folder Upload */}
+          <label>
+            <input
+              type="file"
+              directory=""
+              webkitdirectory=""
+              onChange={handleUpload}
+              className="hidden"
+              data-testid="folder-upload-input"
+            />
+            <Button variant="outline" asChild disabled={uploading}>
+              <span className="cursor-pointer">
+                <FolderOpen className="w-4 h-4 mr-2" />
+                Upload Folder
+              </span>
+            </Button>
+          </label>
+
+          {/* Files Upload */}
           <label>
             <input
               type="file"
               accept=".csv"
+              multiple
               onChange={handleUpload}
               className="hidden"
               data-testid="file-upload-input"
@@ -173,7 +215,7 @@ const DataManagement = () => {
                 ) : (
                   <Upload className="w-4 h-4 mr-2" />
                 )}
-                Upload CSV
+                Upload CSVs
               </span>
             </Button>
           </label>
@@ -192,9 +234,8 @@ const DataManagement = () => {
                 <button
                   key={index}
                   onClick={() => selectFolder(folder)}
-                  className={`file-item w-full ${
-                    selectedFolder?.path === folder.path ? 'file-item-selected' : ''
-                  }`}
+                  className={`file-item w-full ${selectedFolder?.path === folder.path ? 'file-item-selected' : ''
+                    }`}
                   data-testid={`folder-item-${index}`}
                 >
                   <FolderOpen className="w-5 h-5 text-primary" />
@@ -335,7 +376,7 @@ const DataManagement = () => {
                       <TableRow key={i}>
                         {previewData.columns?.map((col, j) => (
                           <TableCell key={j} className="font-mono text-xs whitespace-nowrap">
-                            {typeof row[col] === 'number' 
+                            {typeof row[col] === 'number'
                               ? row[col].toFixed?.(4) || row[col]
                               : String(row[col]).slice(0, 20)}
                           </TableCell>

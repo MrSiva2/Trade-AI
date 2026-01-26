@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from "react";
 import axios from "axios";
 import { API } from "../App";
 import { toast } from "sonner";
-import { createChart } from "lightweight-charts";
 import {
   Play,
   LineChart as LineChartIcon,
@@ -72,10 +71,6 @@ const Backtesting = () => {
   });
 
   const [availableColumns, setAvailableColumns] = useState([]);
-  const chartContainerRef = useRef(null);
-  const chartRef = useRef(null);
-  const candlestickSeriesRef = useRef(null);
-  const volumeSeriesRef = useRef(null);
 
   useEffect(() => {
     fetchData();
@@ -135,115 +130,23 @@ const Backtesting = () => {
       <div className="flex items-start justify-between">
         <div>
           <p className="metric-label">{title}</p>
-          <p className={`metric-value text-xl font-bold ${positive === true ? 'text-emerald-500' :
-            positive === false ? 'text-rose-500' : ''
+          <p className={`metric-value text-xl ${positive === true ? 'trading-positive' :
+            positive === false ? 'trading-negative' : ''
             }`}>
             {value}
           </p>
-          {subtitle && <p className="text-[10px] text-muted-foreground mt-1 uppercase tracking-wider">{subtitle}</p>}
+          {subtitle && <p className="text-xs text-muted-foreground mt-1">{subtitle}</p>}
         </div>
-        <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${positive === true ? 'bg-emerald-500/10' :
-          positive === false ? 'bg-rose-500/10' : 'bg-primary/10'
+        <div className={`w-8 h-8 rounded-md flex items-center justify-center ${positive === true ? 'bg-green-500/10' :
+          positive === false ? 'bg-red-500/10' : 'bg-primary/10'
           }`}>
-          <Icon className={`w-4 h-4 ${positive === true ? 'text-emerald-500' :
-            positive === false ? 'text-rose-500' : 'text-primary'
+          <Icon className={`w-4 h-4 ${positive === true ? 'text-green-500' :
+            positive === false ? 'text-red-500' : 'text-primary'
             }`} />
         </div>
       </div>
     </div>
   );
-
-  // Initialize and update chart
-  useEffect(() => {
-    if (!chartContainerRef.current || !currentResult) return;
-
-    // Create chart if it doesn't exist
-    if (!chartRef.current) {
-      chartRef.current = createChart(chartContainerRef.current, {
-        layout: {
-          background: { color: 'transparent' },
-          textColor: '#d1d4dc',
-        },
-        grid: {
-          vertLines: { color: 'rgba(42, 46, 57, 0.5)' },
-          horzLines: { color: 'rgba(42, 46, 57, 0.5)' },
-        },
-        rightPriceScale: {
-          borderVisible: false,
-        },
-        timeScale: {
-          borderVisible: false,
-          timeVisible: true,
-          secondsVisible: false,
-        },
-        handleScroll: true,
-        handleScale: true,
-      });
-
-      candlestickSeriesRef.current = chartRef.current.addCandlestickSeries({
-        upColor: '#26a69a',
-        downColor: '#ef5350',
-        borderVisible: false,
-        wickUpColor: '#26a69a',
-        wickDownColor: '#ef5350',
-      });
-
-      const handleResize = () => {
-        if (chartRef.current && chartContainerRef.current) {
-          chartRef.current.applyOptions({ width: chartContainerRef.current.clientWidth });
-        }
-      };
-
-      window.addEventListener('resize', handleResize);
-      return () => {
-        window.removeEventListener('resize', handleResize);
-        if (chartRef.current) {
-          chartRef.current.remove();
-          chartRef.current = null;
-        }
-      };
-    }
-
-    // Update chart data
-    if (currentResult.price_data && currentResult.price_data.length > 0) {
-      const formattedData = currentResult.price_data.map(d => ({
-        time: (typeof d.time === 'string' && d.time.includes('-')) ? d.time :
-          new Date(d.time).getTime() / 1000,
-        open: d.open,
-        high: d.high,
-        low: d.low,
-        close: d.close,
-      }));
-
-      // Sort data for lightweight-charts
-      formattedData.sort((a, b) => {
-        const timeA = typeof a.time === 'number' ? a.time : new Date(a.time).getTime();
-        const timeB = typeof b.time === 'number' ? b.time : new Date(b.time).getTime();
-        return timeA - timeB;
-      });
-
-      candlestickSeriesRef.current.setData(formattedData);
-
-      // Add markers for trades
-      const markers = currentResult.trades.map(trade => {
-        return {
-          time: (typeof trade.time === 'string' && trade.time.includes('-')) ? trade.time :
-            new Date(trade.time).getTime() / 1000,
-          position: trade.type === 'BUY' ? 'belowBar' : 'aboveBar',
-          color: trade.type === 'BUY' ? '#26a69a' : '#ef5350',
-          shape: trade.type === 'BUY' ? 'arrowUp' : 'arrowDown',
-          text: trade.type === 'BUY' ? 'BUY' : `SELL ${trade.pnl >= 0 ? '✓' : '✗'}`,
-        };
-      });
-
-      // Filter markers to ensure they exist in price data
-      const validTimes = new Set(formattedData.map(d => d.time));
-      const filteredMarkers = markers.filter(m => validTimes.has(m.time));
-
-      candlestickSeriesRef.current.setMarkers(filteredMarkers);
-      chartRef.current.timeScale().fitContent();
-    }
-  }, [currentResult]);
 
   if (loading) {
     return (
@@ -423,139 +326,104 @@ const Backtesting = () => {
           </CardContent>
         </Card>
 
-        {/* Results / Dashboard Panel */}
+        {/* Results Panel */}
         <div className="col-span-12 lg:col-span-9 space-y-4">
           {currentResult ? (
-            <div className="grid grid-cols-12 gap-4">
-              {/* Left Column: Main Chart */}
-              <div className="col-span-12 xl:col-span-8 space-y-4">
-                <Card className="panel border-primary/20" data-testid="backtest-chart">
-                  <CardHeader className="panel-header flex flex-row items-center justify-between">
-                    <CardTitle className="panel-title flex items-center">
-                      <LineChartIcon className="w-4 h-4 mr-2 text-primary" />
-                      Price Action & Predictions
-                    </CardTitle>
-                    <div className="flex items-center gap-4 text-xs font-mono">
-                      <div className="flex items-center gap-1">
-                        <div className="w-3 h-3 bg-[#26a69a]" /> <span>Bullish</span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <div className="w-3 h-3 bg-[#ef5350]" /> <span>Bearish</span>
-                      </div>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="p-0 bg-[#0b0e14]">
-                    <div ref={chartContainerRef} className="w-full h-[500px]" />
-                  </CardContent>
-                </Card>
+            <>
+              {/* Metrics Cards */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4" data-testid="backtest-metrics">
+                <MetricCard
+                  title="Total Return"
+                  value={`${currentResult.total_return >= 0 ? '+' : ''}${currentResult.total_return.toFixed(2)}%`}
+                  icon={currentResult.total_return >= 0 ? TrendingUp : TrendingDown}
+                  positive={currentResult.total_return >= 0}
+                />
+                <MetricCard
+                  title="Sharpe Ratio"
+                  value={currentResult.sharpe_ratio.toFixed(2)}
+                  icon={Target}
+                  positive={currentResult.sharpe_ratio > 1}
+                />
+                <MetricCard
+                  title="Max Drawdown"
+                  value={`-${currentResult.max_drawdown.toFixed(2)}%`}
+                  icon={ArrowDownRight}
+                  positive={false}
+                />
+                <MetricCard
+                  title="Total Trades"
+                  value={currentResult.total_trades}
+                  icon={Activity}
+                  subtitle={`Win: ${currentResult.winning_trades} | Loss: ${currentResult.losing_trades}`}
+                />
+              </div>
 
-                {/* Trade List Table */}
-                <Card className="panel" data-testid="trade-list">
-                  <CardHeader className="panel-header">
-                    <CardTitle className="panel-title">Trade History</CardTitle>
-                  </CardHeader>
-                  <CardContent className="p-0">
-                    <ScrollArea className="h-[250px]">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Type</TableHead>
-                            <TableHead>Time</TableHead>
-                            <TableHead className="text-right">Price</TableHead>
-                            <TableHead className="text-right">Shares</TableHead>
-                            <TableHead className="text-right">Value</TableHead>
-                            <TableHead className="text-right">P&L</TableHead>
+              {/* TradingView-style Chart */}
+              <Card className="panel" data-testid="backtest-chart">
+                <CardHeader className="panel-header">
+                  <CardTitle className="panel-title">
+                    <LineChartIcon className="w-4 h-4 mr-2 inline" />
+                    Price Chart with Trade Executions
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <div ref={chartContainerRef} className="w-full" />
+                </CardContent>
+              </Card>
+
+              {/* Trade List */}
+              <Card className="panel" data-testid="trade-list">
+                <CardHeader className="panel-header">
+                  <CardTitle className="panel-title">Trade History</CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <ScrollArea className="h-[200px]">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Type</TableHead>
+                          <TableHead>Time</TableHead>
+                          <TableHead className="text-right">Price</TableHead>
+                          <TableHead className="text-right">Shares</TableHead>
+                          <TableHead className="text-right">Value</TableHead>
+                          <TableHead className="text-right">P&L</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {currentResult.trades?.map((trade, i) => (
+                          <TableRow key={i}>
+                            <TableCell>
+                              <span className={`badge ${trade.type === 'BUY' ? 'status-running' : 'status-failed'
+                                }`}>
+                                {trade.type}
+                              </span>
+                            </TableCell>
+                            <TableCell className="font-mono text-xs">
+                              {trade.time}
+                            </TableCell>
+                            <TableCell className="font-mono text-right">
+                              ${trade.price.toFixed(2)}
+                            </TableCell>
+                            <TableCell className="font-mono text-right">
+                              {trade.shares.toFixed(4)}
+                            </TableCell>
+                            <TableCell className="font-mono text-right">
+                              ${trade.value.toFixed(2)}
+                            </TableCell>
+                            <TableCell className={`font-mono text-right ${trade.pnl > 0 ? 'trading-positive' :
+                              trade.pnl < 0 ? 'trading-negative' : ''
+                              }`}>
+                              {trade.pnl !== undefined ?
+                                `${trade.pnl >= 0 ? '+' : ''}$${trade.pnl.toFixed(2)}` : '-'}
+                            </TableCell>
                           </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {currentResult.trades?.map((trade, i) => (
-                            <TableRow key={i}>
-                              <TableCell>
-                                <span className={`badge ${trade.type === 'BUY' ? 'status-running' : 'status-failed'}`}>
-                                  {trade.type}
-                                </span>
-                              </TableCell>
-                              <TableCell className="font-mono text-xs">{trade.time}</TableCell>
-                              <TableCell className="font-mono text-right">${trade.price.toFixed(2)}</TableCell>
-                              <TableCell className="font-mono text-right">{trade.shares.toFixed(4)}</TableCell>
-                              <TableCell className="font-mono text-right">${trade.value.toFixed(2)}</TableCell>
-                              <TableCell className={`font-mono text-right ${trade.pnl > 0 ? 'trading-positive' : trade.pnl < 0 ? 'trading-negative' : ''}`}>
-                                {trade.pnl !== undefined ? `${trade.pnl >= 0 ? '+' : ''}$${trade.pnl.toFixed(2)}` : '-'}
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </ScrollArea>
-                  </CardContent>
-                </Card>
-              </div>
-
-              {/* Right Column: Performance Metrics & Equity */}
-              <div className="col-span-12 xl:col-span-4 space-y-4">
-                <Card className="panel h-full">
-                  <CardHeader className="panel-header">
-                    <CardTitle className="panel-title flex items-center">
-                      <Target className="w-4 h-4 mr-2 text-primary" />
-                      Performance Analytics
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="p-4 space-y-4">
-                    <div className="grid grid-cols-1 gap-3">
-                      <MetricCard
-                        title="Total Return"
-                        value={`${currentResult.total_return >= 0 ? '+' : ''}${currentResult.total_return.toFixed(2)}%`}
-                        icon={currentResult.total_return >= 0 ? TrendingUp : TrendingDown}
-                        positive={currentResult.total_return >= 0}
-                      />
-                      <MetricCard
-                        title="Win Rate"
-                        value={`${((currentResult.winning_trades / (currentResult.total_trades || 1)) * 100).toFixed(1)}%`}
-                        icon={Percent}
-                        positive={currentResult.winning_trades / (currentResult.total_trades || 1) > 0.5}
-                        subtitle={`${currentResult.winning_trades} Wins / ${currentResult.losing_trades} Losses`}
-                      />
-                      <MetricCard
-                        title="Sharpe Ratio"
-                        value={currentResult.sharpe_ratio.toFixed(2)}
-                        icon={Activity}
-                        positive={currentResult.sharpe_ratio > 1}
-                      />
-                      <MetricCard
-                        title="Max Drawdown"
-                        value={`-${currentResult.max_drawdown.toFixed(2)}%`}
-                        icon={ArrowDownRight}
-                        positive={false}
-                      />
-                    </div>
-
-                    <div className="mt-6 pt-6 border-t border-border">
-                      <h4 className="text-sm font-medium mb-4 flex items-center">
-                        <BarChart3 className="w-4 h-4 mr-2" />
-                        Equity Growth
-                      </h4>
-                      <div className="h-[200px] w-full">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <AreaChart data={currentResult.trades.filter(t => t.type === 'SELL').map((t, i) => ({ i, val: t.value }))}>
-                            <defs>
-                              <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.3} />
-                                <stop offset="95%" stopColor="var(--primary)" stopOpacity={0} />
-                              </linearGradient>
-                            </defs>
-                            <Area type="monotone" dataKey="val" stroke="var(--primary)" fillOpacity={1} fill="url(#colorVal)" />
-                            <Tooltip
-                              contentStyle={{ background: '#0b0e14', border: '1px solid #2d3139' }}
-                              labelFormatter={() => 'Trade Step'}
-                            />
-                          </AreaChart>
-                        </ResponsiveContainer>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-            </div>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </ScrollArea>
+                </CardContent>
+              </Card>
+            </>
           ) : (
             <Card className="panel h-[600px]">
               <CardContent className="flex flex-col items-center justify-center h-full text-muted-foreground">

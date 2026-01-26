@@ -64,8 +64,7 @@ const Training = () => {
     feature_columns: [],
     epochs: 100,
     batch_size: 32,
-    validation_split: 0.2,
-    train_test_split_ratio: 0.8  // 80% for training, 20% for testing
+    validation_split: 0.2
   });
 
   const [availableColumns, setAvailableColumns] = useState([]);
@@ -333,8 +332,8 @@ const Training = () => {
                         setConfig({ ...config, feature_columns: newFeatures });
                       }}
                       className={`px-2 py-1 text-xs rounded transition-colors ${config.feature_columns.includes(col)
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-accent hover:bg-accent/80'
+                          ? 'bg-primary text-primary-foreground'
+                          : 'bg-accent hover:bg-accent/80'
                         }`}
                     >
                       {col}
@@ -368,7 +367,6 @@ const Training = () => {
               </div>
             </div>
 
-
             <div className="space-y-2">
               <Label>Validation Split</Label>
               <Input
@@ -381,31 +379,6 @@ const Training = () => {
                 data-testid="validation-split-input"
               />
             </div>
-
-            {/* Train/Test Split Ratio */}
-            <div className="space-y-2">
-              <Label>Train/Test Split Ratio</Label>
-              <div className="flex items-center gap-2">
-                <Input
-                  type="range"
-                  min="0.5"
-                  max="0.95"
-                  step="0.05"
-                  value={config.train_test_split_ratio}
-                  onChange={(e) => setConfig({ ...config, train_test_split_ratio: parseFloat(e.target.value) })}
-                  className="flex-1"
-                  data-testid="train-test-split-input"
-                />
-                <span className="font-mono text-sm w-12 text-right">
-                  {(config.train_test_split_ratio * 100).toFixed(0)}%
-                </span>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                First {(config.train_test_split_ratio * 100).toFixed(0)}% for training,
-                last {((1 - config.train_test_split_ratio) * 100).toFixed(0)}% for testing
-              </p>
-            </div>
-
           </CardContent>
         </Card>
 
@@ -567,8 +540,8 @@ const Training = () => {
                           <div
                             key={i}
                             className={`log-entry ${log.level === 'ERROR' ? 'log-error' :
-                              log.level === 'WARNING' ? 'log-warning' :
-                                log.level === 'SUCCESS' ? 'log-success' : 'log-info'
+                                log.level === 'WARNING' ? 'log-warning' :
+                                  log.level === 'SUCCESS' ? 'log-success' : 'log-info'
                               }`}
                           >
                             <span className="text-muted-foreground mr-2">

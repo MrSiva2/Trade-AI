@@ -5,3 +5,5 @@
 
 # the updates that has emergent_...V... in it is done from a diff acc.
 # It is mentioned to just keep track to roll back and continue with different features.
+
+# the "add file" commit has added the functionality of adding a csv file/ a new folder to the data management page.

@@ -86,13 +86,12 @@ class CustomModelConfig(BaseModel):
 class TrainingRequest(BaseModel):
     model_id: str
     train_data_path: str
-    test_data_path: Optional[str] = None  # Optional - if not provided, will split from train_data_path
+    test_data_path: Optional[str] = None
     target_column: str
     feature_columns: List[str]
     epochs: int = 100
     batch_size: int = 32
     validation_split: float = 0.2
-    train_test_split_ratio: float = 0.8  # Portion for training (0.8 = 80% train, 20% test)
 
 class BacktestRequest(BaseModel):
     model_id: str
@@ -205,24 +204,17 @@ async def run_training(session_id: str, request: TrainingRequest, model_config: 
         df = pd.read_csv(request.train_data_path)
         add_log(session_id, f"Loaded {len(df)} rows with {len(df.columns)} columns")
         
-        # Sequential train/test split (first portion = train, last portion = test)
-        split_idx = int(len(df) * request.train_test_split_ratio)
-        df_train = df.iloc[:split_idx]
-        df_test = df.iloc[split_idx:]
-        
-        add_log(session_id, f"Split data: {len(df_train)} training rows ({request.train_test_split_ratio*100:.0f}%), {len(df_test)} test rows ({(1-request.train_test_split_ratio)*100:.0f}%)")
-        
-        # Prepare features and target from training portion
-        X_train_full = df_train[request.feature_columns].values
-        y_train_full = df_train[request.target_column].values
+        # Prepare features and target
+        X = df[request.feature_columns].values
+        y = df[request.target_column].values
         
         # Create binary labels if continuous
-        if y_train_full.dtype == float:
-            y_train_full = (y_train_full > 0).astype(int)
+        if y.dtype == float:
+            y = (y > 0).astype(int)
         
-        # Further split training data into train/validation for monitoring
+        # Split data
         X_train, X_val, y_train, y_val = train_test_split(
-            X_train_full, y_train_full, test_size=request.validation_split, random_state=42
+            X, y, test_size=request.validation_split, random_state=42
         )
         
         # Scale features
@@ -438,15 +430,37 @@ async def preview_csv(file_path: str, rows: int = 100):
         raise HTTPException(status_code=400, detail=str(e))
 
 @api_router.post("/data/upload")
-async def upload_csv(file: UploadFile = File(...)):
-    """Upload CSV file"""
+async def upload_csv(files: List[UploadFile] = File(...)):
+    """Upload one or more CSV files"""
+    uploaded_files = []
+    failed_files = []
+    
     try:
-        file_path = os.path.join(DATA_FOLDER, file.filename)
-        async with aiofiles.open(file_path, 'wb') as f:
-            content = await file.read()
-            await f.write(content)
+        for file in files:
+            try:
+                if not file.filename.lower().endswith('.csv'):
+                    failed_files.append({"filename": file.filename, "reason": "Not a CSV file"})
+                    continue
+                    
+                file_path = os.path.join(DATA_FOLDER, file.filename)
+                async with aiofiles.open(file_path, 'wb') as f:
+                    content = await file.read()
+                    await f.write(content)
+                
+                uploaded_files.append({
+                    "filename": file.filename,
+                    "path": file_path,
+                    "size": len(content)
+                })
+            except Exception as e:
+                failed_files.append({"filename": file.filename, "reason": str(e)})
         
-        return {"success": True, "path": file_path, "filename": file.filename}
+        return {
+            "success": True, 
+            "uploaded": uploaded_files,
+            "failed": failed_files,
+            "count": len(uploaded_files)
+        }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
