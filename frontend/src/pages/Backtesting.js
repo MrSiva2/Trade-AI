@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import axios from "axios";
 import { API } from "../App";
 import { toast } from "sonner";
@@ -135,6 +135,22 @@ const Backtesting = () => {
       setRunning(false);
     }
   };
+
+  // Optimize data rendering by sampling if too large
+  const displayData = useMemo(() => {
+    if (!currentResult?.price_data) return [];
+    if (currentResult.price_data.length <= 1000) return currentResult.price_data;
+
+    // Sample 1000 points for performance
+    const step = Math.ceil(currentResult.price_data.length / 1000);
+    return currentResult.price_data.filter((_, i) => i % step === 0);
+  }, [currentResult]);
+
+  const displayTrades = useMemo(() => {
+    if (!currentResult?.trades) return [];
+    // Only show trades that exist within the sampled time points or just show all if not too many
+    return currentResult.trades;
+  }, [currentResult]);
 
   const MetricCard = ({ title, value, icon: Icon, positive, subtitle }) => (
     <div className="stat-card">
@@ -359,9 +375,9 @@ const Backtesting = () => {
                 </CardHeader>
                 <CardContent className="p-4 pt-2">
                   <div className="w-full h-[350px]">
-                    {currentResult.price_data && currentResult.price_data.length > 0 ? (
+                    {displayData.length > 0 ? (
                       <ResponsiveContainer width="100%" height="100%">
-                        <ComposedChart data={currentResult.price_data}>
+                        <ComposedChart data={displayData}>
                           <defs>
                             <linearGradient id="colorClose" x1="0" y1="0" x2="0" y2="1">
                               <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
@@ -408,22 +424,22 @@ const Backtesting = () => {
                           {/* BUY Markers */}
                           <Scatter
                             name="BUY Order"
-                            data={currentResult.trades?.filter(t => t.type === 'BUY')}
+                            data={displayTrades.filter(t => t.type === 'BUY')}
                             dataKey="price"
                             fill="#22c55e"
                           >
-                            {currentResult.trades?.filter(t => t.type === 'BUY').map((entry, index) => (
+                            {displayTrades.filter(t => t.type === 'BUY').map((entry, index) => (
                               <Cell key={`buy-${index}`} fill="#22c55e" stroke="#fff" strokeWidth={0.5} r={1.5} />
                             ))}
                           </Scatter>
                           {/* SELL Markers */}
                           <Scatter
                             name="SELL Order"
-                            data={currentResult.trades?.filter(t => t.type === 'SELL')}
+                            data={displayTrades.filter(t => t.type === 'SELL')}
                             dataKey="price"
                             fill="#ef4444"
                           >
-                            {currentResult.trades?.filter(t => t.type === 'SELL').map((entry, index) => (
+                            {displayTrades.filter(t => t.type === 'SELL').map((entry, index) => (
                               <Cell key={`sell-${index}`} fill="#ef4444" stroke="#fff" strokeWidth={0.5} r={1.5} />
                             ))}
                           </Scatter>
@@ -450,7 +466,7 @@ const Backtesting = () => {
                 <CardContent className="p-4 pt-2">
                   <div className="w-full h-[200px]">
                     <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={currentResult.price_data}>
+                      <AreaChart data={displayData}>
                         <defs>
                           <linearGradient id="colorEquity" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="5%" stopColor="#ec4899" stopOpacity={0.3} />
@@ -481,13 +497,11 @@ const Backtesting = () => {
                         />
                         <Area
                           type="monotone"
-                          dataKey={(obj) => {
-                            const ret = currentResult?.total_return || 0;
-                            return ret * 100 + 10000;
-                          }}
+                          dataKey="equity"
                           stroke="#ec4899"
                           fillOpacity={1}
                           fill="url(#colorEquity)"
+                          name="Equity"
                           isAnimationActive={false}
                         />
                       </AreaChart>

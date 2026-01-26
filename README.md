@@ -15,3 +15,6 @@
 # the "bck_tst_1" commit has added backtesting functionality to the backtesting page. But, it is not saving the model name while training, and the backtesting page is not loading the charts to show the executions.
 
 # the "bck_tst_2" commit has fixed the issue of the backtesting page not loading the charts to show the executions. But, it is laggy and showing the pre determined values to test.
+
+# the "bck_tst_3" commit has fixed the issue of rendering the wrong price on chart.
+

@@ -1208,32 +1208,57 @@ async def run_backtest(request: BacktestRequest):
             else:
                 probabilities = predictions.astype(float)
         
+        # Prepare case-insensitive column map
+        lowered_cols = {col.lower(): col for col in df.columns}
+        
+        # Helper to get column name regardless of case
+        def get_col(candidates):
+            for c in candidates:
+                if c.lower() in lowered_cols:
+                    return lowered_cols[c.lower()]
+            return None
+
+        # Detect columns
+        col_open = get_col(['open', 'Open'])
+        col_high = get_col(['high', 'High'])
+        col_low = get_col(['low', 'Low'])
+        col_close = get_col(['close', 'Close'])
+        col_date = get_col(['date', 'Date', 'DateTime', 'Timestamp'])
+        
         # Check for OHLC columns
-        has_ohlc = all(col in df.columns for col in ['open', 'high', 'low', 'close'])
+        has_ohlc = all([col_open, col_high, col_low, col_close])
         
         # Get price data
         if has_ohlc:
-            opens = df['open'].values
-            highs = df['high'].values
-            lows = df['low'].values
-            closes = df['close'].values
-        elif 'close' in df.columns:
-            closes = df['close'].values
-            # Generate synthetic OHLC
+            opens = df[col_open].values
+            highs = df[col_high].values
+            lows = df[col_low].values
+            closes = df[col_close].values
+        elif col_close:
+            closes = df[col_close].values
+            # Generate synthetic OHLC relative to actual close
             opens = closes * (1 - np.random.random(len(closes)) * 0.002)
             highs = closes * (1 + np.random.random(len(closes)) * 0.005)
             lows = closes * (1 - np.random.random(len(closes)) * 0.005)
-        elif 'price' in df.columns:
-            closes = df['price'].values
+        elif 'price' in lowered_cols:
+            col_price = lowered_cols['price']
+            closes = df[col_price].values
             opens = closes * 0.998
             highs = closes * 1.005
             lows = closes * 0.995
         else:
-            # Generate synthetic prices
+            # Generate synthetic prices only if no price columns found
+            logger.warning("No price columns found. Generating synthetic data.")
             closes = np.cumsum(np.random.randn(len(df)) * 0.02 + 0.001) + 100
             opens = closes * 0.998
             highs = closes * 1.005
             lows = closes * 0.995
+        
+        # Capture date column for timestamp
+        if col_date:
+            timestamps = df[col_date].astype(str).values
+        else:
+            timestamps = [f"Point_{i}" for i in range(len(df))]
         
         # Simulate trading with candle targeting
         capital = request.initial_capital
@@ -1244,7 +1269,7 @@ async def run_backtest(request: BacktestRequest):
         
         price_data = []
         for i in range(len(df)):
-            timestamp = df['date'].iloc[i] if 'date' in df.columns else f"2024-01-{i+1:02d}"
+            timestamp = timestamps[i]
             pred = predictions[i]
             prob = probabilities[i]
             
@@ -1313,6 +1338,9 @@ async def run_backtest(request: BacktestRequest):
             # Track equity
             current_equity = capital + (position * closes[i] if position > 0 else 0)
             equity_curve.append(current_equity)
+            
+            # Update price_data with current equity
+            price_data[i]["equity"] = float(current_equity)
         
         # Calculate metrics
         total_return = (equity_curve[-1] - request.initial_capital) / request.initial_capital * 100
