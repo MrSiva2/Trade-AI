@@ -1,3 +1,14 @@
+# ISSUES TO BE ADDRESSED:
+# 1. Preserving Logs
+# 2. Fixing the bugs on the chart rendering on the backtesting page
+# 3. Adding cache feature for all pages, so that the page loads faster when revisited after visiting other pages.
+# 4. Any background processes (ie. training, backtesting) should not be paused or interrupted when opening other pages. Once the background process is completed, it should show a message pop up to notify the user, and the data should be cached.
+# 5. The backtesteed data should be saved after the user clicks a save data button, and the data should be reflected on the dashboard.
+# 6. Fixing the issue of model's name, where it is different form the name it is assigned when in training page.
+
+
+
+
 # Here are your Instructions
 
 # the updates that has cursor_v... in it is done by cursor. If something is not working,
