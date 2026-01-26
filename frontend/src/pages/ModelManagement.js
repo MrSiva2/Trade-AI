@@ -179,6 +179,29 @@ const ModelManagement = () => {
     });
   };
 
+  const downloadModel = async (modelId, e) => {
+    e.stopPropagation();
+    try {
+      const response = await axios.get(`${API}/models/prebuilt/download/${modelId}`, {
+        responseType: 'blob'
+      });
+      
+      // Create download link
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `${modelId}_model.py`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      
+      toast.success("Model downloaded successfully");
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Failed to download model");
+    }
+  };
+
   const ModelCard = ({ model, type }) => (
     <div
       className={`model-card ${selectedModel?.id === model.id ? 'model-card-selected' : ''}`}
@@ -198,6 +221,18 @@ const ModelManagement = () => {
         <div className="flex gap-1">
           {selectedModel?.id === model.id && (
             <Check className="w-5 h-5 text-primary" />
+          )}
+          {type === "prebuilt" && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 w-8 p-0 text-muted-foreground hover:text-primary"
+              onClick={(e) => downloadModel(model.id, e)}
+              data-testid={`download-model-${model.id}`}
+              title="Download model file"
+            >
+              <Download className="w-4 h-4" />
+            </Button>
           )}
           {type !== "prebuilt" && (
             <Button

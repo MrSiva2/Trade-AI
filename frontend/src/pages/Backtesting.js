@@ -63,13 +63,12 @@ const Backtesting = () => {
   const [config, setConfig] = useState({
     model_id: "",
     test_data_path: "",
-    target_column: "",
-    feature_columns: [],
     initial_capital: 10000,
     position_size: 0.1,
     target_candle: 1
   });
 
+  const [selectedModel, setSelectedModel] = useState(null);
   const [availableColumns, setAvailableColumns] = useState([]);
 
   useEffect(() => {
@@ -94,6 +93,12 @@ const Backtesting = () => {
     }
   };
 
+  const handleModelSelect = (modelId) => {
+    setConfig({ ...config, model_id: modelId });
+    const model = savedModels.find(m => m.id === modelId);
+    setSelectedModel(model);
+  };
+
   const handleFileSelect = async (path) => {
     setConfig({ ...config, test_data_path: path });
     try {
@@ -107,8 +112,13 @@ const Backtesting = () => {
   };
 
   const runBacktest = async () => {
-    if (!config.model_id || !config.test_data_path || !config.target_column || config.feature_columns.length === 0) {
-      toast.error("Please fill in all required fields");
+    if (!config.model_id || !config.test_data_path) {
+      toast.error("Please select a model and test data file");
+      return;
+    }
+
+    if (!selectedModel) {
+      toast.error("Model configuration not loaded");
       return;
     }
 
@@ -119,7 +129,7 @@ const Backtesting = () => {
       setResults(prev => [response.data, ...prev]);
       toast.success("Backtest completed");
     } catch (error) {
-      toast.error("Failed to run backtest");
+      toast.error(error.response?.data?.detail || "Failed to run backtest");
     } finally {
       setRunning(false);
     }
@@ -192,7 +202,7 @@ const Backtesting = () => {
               <Label>Trained Model</Label>
               <Select
                 value={config.model_id}
-                onValueChange={(v) => setConfig({ ...config, model_id: v })}
+                onValueChange={handleModelSelect}
               >
                 <SelectTrigger data-testid="backtest-model-select">
                   <SelectValue placeholder="Select model" />
@@ -200,7 +210,7 @@ const Backtesting = () => {
                 <SelectContent>
                   {savedModels.map((model) => (
                     <SelectItem key={model.id} value={model.id}>
-                      {model.name}
+                      {model.name} ({model.file_type === 'py' ? 'Python' : 'Joblib'})
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -209,6 +219,31 @@ const Backtesting = () => {
                 <p className="text-xs text-muted-foreground">
                   No trained models. Train a model first.
                 </p>
+              )}
+              {selectedModel && (
+                <div className="mt-2 p-2 bg-accent rounded-md text-xs space-y-1">
+                  <p className="font-semibold">Model Configuration:</p>
+                  {selectedModel.target_column && (
+                    <p><span className="text-muted-foreground">Target:</span> {selectedModel.target_column}</p>
+                  )}
+                  {selectedModel.feature_columns && selectedModel.feature_columns.length > 0 && (
+                    <div>
+                      <p className="text-muted-foreground">Features ({selectedModel.feature_columns.length}):</p>
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {selectedModel.feature_columns.slice(0, 5).map((col, i) => (
+                          <span key={i} className="px-1.5 py-0.5 bg-background rounded text-xs">
+                            {col}
+                          </span>
+                        ))}
+                        {selectedModel.feature_columns.length > 5 && (
+                          <span className="px-1.5 py-0.5 bg-background rounded text-xs">
+                            +{selectedModel.feature_columns.length - 5} more
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
 
@@ -232,51 +267,6 @@ const Backtesting = () => {
               </Select>
             </div>
 
-            {/* Target Column */}
-            <div className="space-y-2">
-              <Label>Target Column</Label>
-              <Select
-                value={config.target_column}
-                onValueChange={(v) => setConfig({ ...config, target_column: v })}
-              >
-                <SelectTrigger data-testid="backtest-target-select">
-                  <SelectValue placeholder="Select target" />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableColumns.map((col) => (
-                    <SelectItem key={col} value={col}>
-                      {col}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Feature Columns */}
-            <div className="space-y-2">
-              <Label>Feature Columns</Label>
-              <div className="flex flex-wrap gap-1 p-2 border border-border rounded-md min-h-[60px] max-h-[120px] overflow-y-auto">
-                {availableColumns
-                  .filter(col => col !== config.target_column)
-                  .map((col) => (
-                    <button
-                      key={col}
-                      onClick={() => {
-                        const newFeatures = config.feature_columns.includes(col)
-                          ? config.feature_columns.filter(c => c !== col)
-                          : [...config.feature_columns, col];
-                        setConfig({ ...config, feature_columns: newFeatures });
-                      }}
-                      className={`px-2 py-1 text-xs rounded transition-colors ${config.feature_columns.includes(col)
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-accent hover:bg-accent/80'
-                        }`}
-                    >
-                      {col}
-                    </button>
-                  ))}
-              </div>
-            </div>
 
             {/* Trading Parameters */}
             <div className="space-y-2">
@@ -366,8 +356,10 @@ const Backtesting = () => {
                     Price Chart with Trade Executions
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="p-0">
-                  <div ref={chartContainerRef} className="w-full" />
+                <CardContent className="p-4">
+                  <div className="w-full h-[400px] flex items-center justify-center text-muted-foreground">
+                    <p>Chart visualization coming soon</p>
+                  </div>
                 </CardContent>
               </Card>
 

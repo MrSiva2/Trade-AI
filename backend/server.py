@@ -1,5 +1,5 @@
 from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, BackgroundTasks, WebSocket, WebSocketDisconnect, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -16,6 +16,8 @@ import json
 import asyncio
 import aiofiles
 import joblib
+import importlib.util
+import sys
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
@@ -52,10 +54,17 @@ websocket_connections: Dict[str, List[WebSocket]] = {}
 # Default data folder
 DATA_FOLDER = os.environ.get('DATA_FOLDER', '/app/data')
 MODEL_FOLDER = os.environ.get('MODEL_FOLDER', '/app/models')
+PREBUILT_MODELS_FOLDER = ROOT_DIR / 'models' / 'prebuilt'
+SAVED_MODELS_FOLDER = Path(MODEL_FOLDER) / 'saved'
 
 # Ensure folders exist
 os.makedirs(DATA_FOLDER, exist_ok=True)
 os.makedirs(MODEL_FOLDER, exist_ok=True)
+os.makedirs(SAVED_MODELS_FOLDER, exist_ok=True)
+os.makedirs(PREBUILT_MODELS_FOLDER, exist_ok=True)
+
+# Model class cache
+_model_class_cache: Dict[str, Any] = {}
 
 # Pydantic Models
 class FolderPath(BaseModel):
@@ -93,15 +102,15 @@ class TrainingRequest(BaseModel):
     epochs: int = 100
     batch_size: int = 32
     validation_split: float = 0.2
+    nth_candle: Optional[int] = None  # For validation predictions
 
 class BacktestRequest(BaseModel):
     model_id: str
     test_data_path: str
-    target_column: str
-    feature_columns: List[str]
     initial_capital: float = 10000.0
     position_size: float = 0.1
     target_candle: int = 1  # Which candle ahead to target (1st, 2nd, 3rd, etc.)
+    # target_column and feature_columns will come from the model file
 
 class TrainingSession(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -129,37 +138,93 @@ class BacktestResult(BaseModel):
     price_data: List[Dict[str, Any]] = []
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
-# Pre-built model templates
-PREBUILT_MODELS = [
-    {
-        "id": "rf_default",
-        "name": "Random Forest Classifier",
-        "type": "random_forest",
-        "parameters": {"n_estimators": 100, "max_depth": 10, "random_state": 42},
-        "description": "Ensemble learning method using multiple decision trees"
-    },
-    {
-        "id": "gb_default",
-        "name": "Gradient Boosting Classifier",
-        "type": "gradient_boosting",
-        "parameters": {"n_estimators": 100, "learning_rate": 0.1, "max_depth": 5},
-        "description": "Sequential ensemble method that corrects errors of previous models"
-    },
-    {
-        "id": "lr_default",
-        "name": "Logistic Regression",
-        "type": "logistic_regression",
-        "parameters": {"C": 1.0, "max_iter": 1000},
-        "description": "Linear model for binary classification"
-    },
-    {
-        "id": "lstm_default",
-        "name": "LSTM Neural Network",
-        "type": "lstm",
-        "parameters": {"units": 50, "dropout": 0.2, "recurrent_dropout": 0.2},
-        "description": "Long Short-Term Memory network for sequential data"
+# Load pre-built models from .py files
+def load_prebuilt_models():
+    """Load pre-built model metadata from .py files"""
+    models = []
+    model_file_map = {
+        "rf_default": "random_forest_model.py",
+        "gb_default": "gradient_boosting_model.py",
+        "lr_default": "logistic_regression_model.py",
+        "lstm_default": "lstm_model.py"
     }
-]
+    
+    for model_id, filename in model_file_map.items():
+        model_path = PREBUILT_MODELS_FOLDER / filename
+        if model_path.exists():
+            try:
+                # Load the model class to get metadata
+                spec = importlib.util.spec_from_file_location(f"model_{model_id}", model_path)
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[f"model_{model_id}"] = module
+                spec.loader.exec_module(module)
+                
+                # Find the model class (it will be the class with MODEL_TYPE attribute)
+                model_class = None
+                for attr_name in dir(module):
+                    attr = getattr(module, attr_name)
+                    if (isinstance(attr, type) and 
+                        hasattr(attr, 'MODEL_TYPE') and 
+                        hasattr(attr, 'MODEL_ID') and
+                        attr.MODEL_ID == model_id):
+                        model_class = attr
+                        break
+                
+                if model_class:
+                    # Create instance to get default parameters
+                    instance = model_class()
+                    models.append({
+                        "id": model_class.MODEL_ID,
+                        "name": model_class.MODEL_NAME,
+                        "type": model_class.MODEL_TYPE,
+                        "parameters": instance.parameters,
+                        "description": model_class.DESCRIPTION,
+                        "file_path": str(model_path)
+                    })
+            except Exception as e:
+                logger.error(f"Failed to load model {model_id} from {filename}: {e}")
+    
+    return models
+
+def get_prebuilt_models():
+    """Get cached or load pre-built models"""
+    if not hasattr(get_prebuilt_models, '_cache'):
+        get_prebuilt_models._cache = load_prebuilt_models()
+    return get_prebuilt_models._cache
+
+def load_model_class(model_id: str):
+    """Load a model class from .py file"""
+    if model_id in _model_class_cache:
+        return _model_class_cache[model_id]
+    
+    model_file_map = {
+        "rf_default": ("random_forest_model.py", "RandomForestModel"),
+        "gb_default": ("gradient_boosting_model.py", "GradientBoostingModel"),
+        "lr_default": ("logistic_regression_model.py", "LogisticRegressionModel"),
+        "lstm_default": ("lstm_model.py", "LSTMModel")
+    }
+    
+    if model_id not in model_file_map:
+        raise ValueError(f"Unknown model ID: {model_id}")
+    
+    filename, class_name = model_file_map[model_id]
+    model_path = PREBUILT_MODELS_FOLDER / filename
+    
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model file not found: {model_path}")
+    
+    try:
+        spec = importlib.util.spec_from_file_location(f"model_{model_id}", model_path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[f"model_{model_id}"] = module
+        spec.loader.exec_module(module)
+        
+        model_class = getattr(module, class_name)
+        _model_class_cache[model_id] = model_class
+        return model_class
+    except Exception as e:
+        logger.error(f"Failed to load model class {class_name} from {filename}: {e}")
+        raise
 
 def add_log(session_id: str, message: str, level: str = "INFO"):
     """Add log message to session queue"""
@@ -193,140 +258,91 @@ def create_model(model_config: Dict[str, Any]):
     else:
         return RandomForestClassifier(n_estimators=100, random_state=42)
 
-async def run_training(session_id: str, request: TrainingRequest, model_config: Dict):
-    """Background training task"""
+async def run_training(session_id: str, request: TrainingRequest, model_instance):
+    """Background training task using model class methods"""
     try:
         training_sessions[session_id]["status"] = "running"
         training_sessions[session_id]["started_at"] = datetime.now(timezone.utc).isoformat()
         
-        add_log(session_id, f"Starting training for model: {model_config.get('name', 'Unknown')}")
+        add_log(session_id, f"Starting training for model: {model_instance.MODEL_NAME}")
         add_log(session_id, f"Loading data from: {request.train_data_path}")
         
         # Load data
         df = pd.read_csv(request.train_data_path)
         add_log(session_id, f"Loaded {len(df)} rows with {len(df.columns)} columns")
         
-        # Prepare features and target
-        # Filter out non-numeric columns from features
-        feature_cols = request.feature_columns
-        X_df = df[feature_cols]
+        # Use model's preprocess_data method
+        try:
+            X, y, scaler = model_instance.preprocess_data(df, request.target_column, request.feature_columns)
+            add_log(session_id, f"Data preprocessed: {X.shape[1]} features, {len(y)} samples")
+            add_log(session_id, f"Target distribution: {dict(zip(*np.unique(y, return_counts=True)))}")
+        except Exception as e:
+            raise ValueError(f"Data preprocessing failed: {str(e)}")
         
-        # Identify non-numeric columns
-        non_numeric_cols = X_df.select_dtypes(exclude=[np.number]).columns.tolist()
-        if non_numeric_cols:
-            add_log(session_id, f"Dropping non-numeric columns: {non_numeric_cols}", "WARNING")
-            X_df = X_df.drop(columns=non_numeric_cols)
-            
-        if X_df.empty:
-            raise ValueError("No numeric features available for training")
-            
-        X = X_df.values
-        y = df[request.target_column].values
-        
-        add_log(session_id, f"Training with {X.shape[1]} features: {list(X_df.columns)}")
-        
-        
-        add_log(session_id, f"Training with {X.shape[1]} features: {list(X_df.columns)}")
-        
-        # Create binary labels if continuous or if target has only one class
-        # For classification, we need at least 2 classes
-        if y.dtype == float:
-             # Calculate median to split into two classes
-            threshold = np.median(y)
-            y_binary = (y > threshold).astype(int)
-            add_log(session_id, f"Target column '{request.target_column}' is continuous. Converted to binary classes (Threshold: {threshold:.4f})", "WARNING")
-            y = y_binary
-        
-        # Verify class distribution
-        unique_classes = np.unique(y)
-        if len(unique_classes) < 2:
-            raise ValueError(f"Target column '{request.target_column}' contains only one class: {unique_classes}. Classification requires at least two classes (e.g., 0 and 1).")
-            
-        add_log(session_id, f"Target distribution: {dict(zip(*np.unique(y, return_counts=True)))}")
-        
-        # Split data
-        X_train, X_val, y_train, y_val = train_test_split(
-            X, y, test_size=request.validation_split, random_state=42
-        )
-        
-        # Scale features
-        scaler = StandardScaler()
-        X_train_scaled = scaler.fit_transform(X_train)
-        X_val_scaled = scaler.transform(X_val)
-        
-        add_log(session_id, f"Training set: {len(X_train)} samples, Validation set: {len(X_val)} samples")
-        
-        # Create and train model
-        model = create_model(model_config)
-        
-        # Simulate epochs for progress tracking
+        # Train using model's train method
         total_epochs = request.epochs
         training_sessions[session_id]["total_epochs"] = total_epochs
-        metrics = {"loss": [], "accuracy": [], "val_loss": [], "val_accuracy": []}
         
+        add_log(session_id, f"Starting training with {total_epochs} epochs, validation split: {request.validation_split}")
+        if request.nth_candle:
+            add_log(session_id, f"Using nth candle validation: {request.nth_candle}")
+        
+        # Train the model (this will simulate epochs internally)
+        trained_model, metrics = model_instance.train(
+            X, y, 
+            epochs=total_epochs,
+            validation_split=request.validation_split,
+            nth_candle=request.nth_candle,
+            scaler=scaler
+        )
+        
+        # Update metrics in real-time (simulate progress)
         for epoch in range(total_epochs):
             if training_sessions[session_id]["status"] == "stopped":
                 add_log(session_id, "Training stopped by user", "WARNING")
                 break
             
-            # For sklearn models, we train once but simulate epochs
-            if epoch == 0:
-                model.fit(X_train_scaled, y_train)
-            
-            # Calculate metrics
-            train_pred = model.predict(X_train_scaled)
-            val_pred = model.predict(X_val_scaled)
-            
-            train_acc = accuracy_score(y_train, train_pred)
-            val_acc = accuracy_score(y_val, val_pred)
-            
-            # Simulate loss decrease
-            train_loss = max(0.1, 1.0 - (epoch / total_epochs) * 0.8 + np.random.random() * 0.05)
-            val_loss = max(0.15, 1.0 - (epoch / total_epochs) * 0.7 + np.random.random() * 0.08)
-            
-            metrics["loss"].append(train_loss)
-            metrics["accuracy"].append(train_acc)
-            metrics["val_loss"].append(val_loss)
-            metrics["val_accuracy"].append(val_acc)
-            
             training_sessions[session_id]["current_epoch"] = epoch + 1
-            training_sessions[session_id]["metrics"] = metrics
+            training_sessions[session_id]["metrics"] = {
+                "loss": metrics["loss"][:epoch+1],
+                "accuracy": metrics["accuracy"][:epoch+1],
+                "val_loss": metrics["val_loss"][:epoch+1],
+                "val_accuracy": metrics["val_accuracy"][:epoch+1]
+            }
             
-            # Add output with predictions
-            if epoch % 10 == 0:
-                probs = []
-                if hasattr(model, 'predict_proba'):
-                    try:
-                        proba = model.predict_proba(X_val_scaled[:10])
-                        # Handle case where model only predicts one class
-                        if proba.shape[1] == 2:
-                            probs = proba[:, 1].tolist()
-                        else:
-                            probs = proba[:, 0].tolist()
-                    except Exception:
-                        probs = []
+            # Add output with predictions every 10 epochs
+            if epoch % 10 == 0 and epoch < len(metrics["val_accuracy"]):
+                # Get validation predictions for display
+                X_train, X_val, y_train, y_val = train_test_split(
+                    X, y, test_size=request.validation_split, random_state=42
+                )
+                val_pred, val_probs = model_instance.test(X_val[:10])
+                
                 add_output(session_id, {
                     "epoch": epoch + 1,
-                    "predictions": val_pred[:10].tolist(),
-                    "actual": y_val[:10].tolist(),
-                    "probabilities": probs
+                    "predictions": val_pred[:10].tolist() if hasattr(val_pred, 'tolist') else list(val_pred[:10]),
+                    "actual": y_val[:10].tolist() if hasattr(y_val, 'tolist') else list(y_val[:10]),
+                    "probabilities": val_probs[:10].tolist() if hasattr(val_probs, 'tolist') else list(val_probs[:10])
                 })
             
-            add_log(session_id, f"Epoch {epoch + 1}/{total_epochs} - loss: {train_loss:.4f} - accuracy: {train_acc:.4f} - val_loss: {val_loss:.4f} - val_accuracy: {val_acc:.4f}")
+            loss = metrics["loss"][epoch] if epoch < len(metrics["loss"]) else 0
+            acc = metrics["accuracy"][epoch] if epoch < len(metrics["accuracy"]) else 0
+            val_loss = metrics["val_loss"][epoch] if epoch < len(metrics["val_loss"]) else 0
+            val_acc = metrics["val_accuracy"][epoch] if epoch < len(metrics["val_accuracy"]) else 0
+            
+            add_log(session_id, f"Epoch {epoch + 1}/{total_epochs} - loss: {loss:.4f} - accuracy: {acc:.4f} - val_loss: {val_loss:.4f} - val_accuracy: {val_acc:.4f}")
             
             await asyncio.sleep(0.1)  # Small delay for real-time updates
         
-        # Save model
-        model_path = os.path.join(MODEL_FOLDER, f"{session_id}_model.joblib")
-        scaler_path = os.path.join(MODEL_FOLDER, f"{session_id}_scaler.joblib")
-        joblib.dump(model, model_path)
-        joblib.dump(scaler, scaler_path)
-        
-        add_log(session_id, f"Model saved to: {model_path}")
+        # Store model instance in session for later saving
+        training_sessions[session_id]["model_instance"] = model_instance
+        training_sessions[session_id]["model_name"] = request.model_name
+        training_sessions[session_id]["target_column"] = request.target_column
+        training_sessions[session_id]["feature_columns"] = request.feature_columns
         
         training_sessions[session_id]["status"] = "completed"
         training_sessions[session_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
-        add_log(session_id, "Training completed successfully!", "SUCCESS")
+        add_log(session_id, "Training completed successfully! Click 'Save Model' to save the trained model.", "SUCCESS")
         
         # Store in MongoDB
         await db.training_sessions.update_one(
@@ -334,19 +350,6 @@ async def run_training(session_id: str, request: TrainingRequest, model_config: 
             {"$set": training_sessions[session_id]},
             upsert=True
         )
-
-        # Store saved model metadata
-        try:
-            await db.saved_models.insert_one({
-                "id": session_id,
-                "name": request.model_name or f"Model_{session_id[:8]}",
-                "model_type": model_config.get("type", "unknown"),
-                "file_path": model_path,
-                "created_at": datetime.now(timezone.utc).isoformat()
-            })
-        except Exception as e:
-            logger.error(f"Failed to save model metadata to DB: {e}")
-            # Even if DB is down, the model file is saved on disk
         
     except Exception as e:
         training_sessions[session_id]["status"] = "failed"
@@ -537,9 +540,35 @@ async def upload_csv(files: List[UploadFile] = File(...)):
 
 # Model Management Routes
 @api_router.get("/models/prebuilt")
-async def get_prebuilt_models():
+async def get_prebuilt_models_endpoint():
     """Get list of pre-built models"""
-    return {"models": PREBUILT_MODELS}
+    models = get_prebuilt_models()
+    return {"models": models}
+
+@api_router.get("/models/prebuilt/download/{model_id}")
+async def download_prebuilt_model(model_id: str):
+    """Download a pre-built model .py file"""
+    model_file_map = {
+        "rf_default": "random_forest_model.py",
+        "gb_default": "gradient_boosting_model.py",
+        "lr_default": "logistic_regression_model.py",
+        "lstm_default": "lstm_model.py"
+    }
+    
+    if model_id not in model_file_map:
+        raise HTTPException(status_code=404, detail="Model not found")
+    
+    filename = model_file_map[model_id]
+    model_path = PREBUILT_MODELS_FOLDER / filename
+    
+    if not model_path.exists():
+        raise HTTPException(status_code=404, detail="Model file not found")
+    
+    return FileResponse(
+        path=str(model_path),
+        filename=filename,
+        media_type='text/x-python'
+    )
 
 @api_router.get("/models/custom")
 async def get_custom_models():
@@ -569,36 +598,68 @@ async def create_custom_model(config: CustomModelConfig):
 
 @api_router.get("/models/saved")
 async def get_saved_models():
-    """Get list of saved trained models with metadata"""
+    """Get list of saved trained models with metadata (including .py files)"""
     models = []
     
     try:
-        # Get metadata from MongoDB
+        # Get metadata from MongoDB (prioritize .py files)
         metadata_list = await db.saved_models.find({}, {"_id": 0}).to_list(1000)
         metadata_map = {m["id"]: m for m in metadata_list}
         
-        model_path = Path(MODEL_FOLDER)
-        if model_path.exists():
-            for file in model_path.glob("*_model.joblib"):
+        # First, check for .py files in saved models folder
+        saved_models_path = SAVED_MODELS_FOLDER
+        if saved_models_path.exists():
+            for file in saved_models_path.glob("*_model.py"):
                 try:
                     stat_info = file.stat()
                     session_id = file.stem.replace("_model", "")
                     
-                    # Use metadata if available, otherwise fallback to in-memory session or filename
                     meta = metadata_map.get(session_id, {})
-                    
-                    # Try to get from active sessions if not in DB
                     session_info = training_sessions.get(session_id, {})
                     
-                    name = meta.get("name") or session_info.get("model_name") or file.name
-                    model_type = meta.get("model_type") or session_info.get("model_id", "unknown")
-
+                    name = meta.get("name") or session_info.get("model_name") or file.stem
+                    model_type = meta.get("model_type") or "unknown"
+                    
                     models.append({
                         "id": session_id,
                         "path": str(file),
                         "name": name,
                         "type": model_type,
                         "size": stat_info.st_size,
+                        "file_type": "py",
+                        "target_column": meta.get("target_column"),
+                        "feature_columns": meta.get("feature_columns", []),
+                        "created_at": meta.get("created_at") or session_info.get("started_at") or datetime.fromtimestamp(stat_info.st_mtime).isoformat()
+                    })
+                except Exception:
+                    continue
+        
+        # Also include .joblib files for backward compatibility
+        model_path = Path(MODEL_FOLDER)
+        if model_path.exists():
+            for file in model_path.glob("*_model.joblib"):
+                try:
+                    session_id = file.stem.replace("_model", "")
+                    # Skip if we already have a .py version
+                    if any(m["id"] == session_id for m in models):
+                        continue
+                    
+                    stat_info = file.stat()
+                    meta = metadata_map.get(session_id, {})
+                    session_info = training_sessions.get(session_id, {})
+                    
+                    name = meta.get("name") or session_info.get("model_name") or file.name
+                    model_type = meta.get("model_type") or "unknown"
+                    
+                    models.append({
+                        "id": session_id,
+                        "path": str(file),
+                        "name": name,
+                        "type": model_type,
+                        "size": stat_info.st_size,
+                        "file_type": "joblib",
+                        "target_column": meta.get("target_column"),
+                        "feature_columns": meta.get("feature_columns", []),
                         "created_at": meta.get("created_at") or session_info.get("started_at") or datetime.fromtimestamp(stat_info.st_mtime).isoformat()
                     })
                 except Exception:
@@ -617,6 +678,7 @@ async def get_saved_models():
                         "path": str(file),
                         "name": file.name,
                         "size": stat_info.st_size,
+                        "file_type": "joblib",
                         "created_at": datetime.fromtimestamp(stat_info.st_mtime).isoformat()
                     })
                 except Exception:
@@ -741,20 +803,32 @@ async def start_training(request: TrainingRequest, background_tasks: BackgroundT
     """Start a training session"""
     session_id = str(uuid.uuid4())
     
-    # Get model config
-    model_config = None
-    for model in PREBUILT_MODELS:
-        if model["id"] == request.model_id:
-            model_config = model
-            break
-    
-    if not model_config:
+    # Load model class from .py file
+    model_instance = None
+    try:
+        model_class = load_model_class(request.model_id)
+        # Get parameters from pre-built models list
+        prebuilt_models = get_prebuilt_models()
+        model_config = next((m for m in prebuilt_models if m["id"] == request.model_id), None)
+        if model_config:
+            model_instance = model_class(parameters=model_config.get("parameters", {}))
+        else:
+            # Fallback for custom models
+            custom_model = await db.custom_models.find_one({"id": request.model_id}, {"_id": 0})
+            if custom_model:
+                # For custom models, use default parameters
+                model_instance = model_class()
+            else:
+                raise HTTPException(status_code=404, detail="Model not found")
+    except (ValueError, FileNotFoundError) as e:
+        # Try custom model fallback
         custom_model = await db.custom_models.find_one({"id": request.model_id}, {"_id": 0})
         if custom_model:
+            # For custom models, we'll use the old method for now
             model_config = custom_model
-    
-    if not model_config:
-        raise HTTPException(status_code=404, detail="Model not found")
+            model_instance = None
+        else:
+            raise HTTPException(status_code=404, detail=f"Model not found: {str(e)}")
     
     # Initialize session
     training_sessions[session_id] = {
@@ -773,7 +847,11 @@ async def start_training(request: TrainingRequest, background_tasks: BackgroundT
     output_queues[session_id] = queue.Queue()
     
     # Start training in background
-    asyncio.create_task(run_training(session_id, request, model_config))
+    if model_instance:
+        asyncio.create_task(run_training(session_id, request, model_instance))
+    else:
+        # Fallback for custom models (old method)
+        raise HTTPException(status_code=400, detail="Custom models not yet supported with new model class system")
     
     return {"session_id": session_id, "status": "started"}
 
@@ -822,6 +900,111 @@ async def get_model_output(session_id: str):
                 break
     return {"outputs": outputs}
 
+@api_router.post("/training/save/{session_id}")
+async def save_trained_model(session_id: str):
+    """Save a trained model after training completes"""
+    if session_id not in training_sessions:
+        # Check MongoDB
+        session = await db.training_sessions.find_one({"id": session_id}, {"_id": 0})
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        training_sessions[session_id] = session
+    
+    session = training_sessions[session_id]
+    
+    if session.get("status") != "completed":
+        raise HTTPException(status_code=400, detail="Model training must be completed before saving")
+    
+    if "model_instance" not in session:
+        raise HTTPException(status_code=400, detail="Model instance not found in session")
+    
+    try:
+        model_instance = session["model_instance"]
+        model_name = session.get("model_name") or f"Model_{session_id[:8]}"
+        target_column = session.get("target_column")
+        feature_columns = session.get("feature_columns", [])
+        
+        # Save as .joblib files
+        model_path = os.path.join(MODEL_FOLDER, f"{session_id}_model.joblib")
+        scaler_path = os.path.join(MODEL_FOLDER, f"{session_id}_scaler.joblib")
+        joblib.dump(model_instance.model, model_path)
+        if model_instance.scaler:
+            joblib.dump(model_instance.scaler, scaler_path)
+        
+        # Save as .py file
+        py_model_path = SAVED_MODELS_FOLDER / f"{session_id}_model.py"
+        
+        # Generate Python file content
+        model_type_map = {
+            "random_forest": ("RandomForestModel", "random_forest_model"),
+            "gradient_boosting": ("GradientBoostingModel", "gradient_boosting_model"),
+            "logistic_regression": ("LogisticRegressionModel", "logistic_regression_model"),
+            "lstm": ("LSTMModel", "lstm_model")
+        }
+        
+        model_type = model_instance.MODEL_TYPE
+        class_name, module_name = model_type_map.get(model_type, ("RandomForestModel", "random_forest_model"))
+        
+        py_content = f'''"""
+Trained {model_instance.MODEL_NAME}
+Saved on {datetime.now(timezone.utc).isoformat()}
+"""
+import joblib
+from pathlib import Path
+from models.prebuilt.{module_name} import {class_name}
+
+# Initialize model instance
+model = {class_name}(parameters={model_instance.parameters})
+
+# Load trained model weights
+model_path = Path(__file__).parent / "{session_id}_model.joblib"
+scaler_path = Path(__file__).parent / "{session_id}_scaler.joblib"
+
+model.model = joblib.load(model_path)
+if scaler_path.exists():
+    model.scaler = joblib.load(scaler_path)
+
+# Set column configuration
+model.TARGET_COLUMN = "{target_column}"
+model.FEATURE_COLUMNS = {feature_columns}
+'''
+        
+        # Write .py file
+        with open(py_model_path, 'w') as f:
+            f.write(py_content)
+        
+        # Also copy .joblib files to saved folder for reference
+        import shutil
+        saved_model_path = SAVED_MODELS_FOLDER / f"{session_id}_model.joblib"
+        saved_scaler_path = SAVED_MODELS_FOLDER / f"{session_id}_scaler.joblib"
+        shutil.copy(model_path, saved_model_path)
+        if os.path.exists(scaler_path):
+            shutil.copy(scaler_path, saved_scaler_path)
+        
+        # Store metadata in MongoDB
+        await db.saved_models.insert_one({
+            "id": session_id,
+            "name": model_name,
+            "model_type": model_type,
+            "file_path": str(py_model_path),
+            "joblib_path": str(saved_model_path),
+            "target_column": target_column,
+            "feature_columns": feature_columns,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        })
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "model_name": model_name,
+            "py_file": str(py_model_path),
+            "joblib_file": str(saved_model_path)
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to save model: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save model: {str(e)}")
+
 @api_router.get("/training/sessions")
 async def get_all_sessions():
     """Get all training sessions with full metrics"""
@@ -858,48 +1041,110 @@ async def get_all_sessions():
 # Backtesting Routes
 @api_router.post("/backtest/run")
 async def run_backtest(request: BacktestRequest):
-    """Run backtesting on a trained model"""
-    # Load model
-    model_path = os.path.join(MODEL_FOLDER, f"{request.model_id}_model.joblib")
-    scaler_path = os.path.join(MODEL_FOLDER, f"{request.model_id}_scaler.joblib")
+    """Run backtesting on a trained model using .py model file"""
+    # Try to load from saved models metadata first
+    saved_model = await db.saved_models.find_one({"id": request.model_id}, {"_id": 0})
     
-    if not os.path.exists(model_path):
-        # Try to find by session ID pattern
-        for file in Path(MODEL_FOLDER).glob("*_model.joblib"):
-            if request.model_id in file.name:
-                model_path = str(file)
-                scaler_path = str(file).replace("_model", "_scaler")
-                break
+    model_instance = None
+    target_column = None
+    feature_columns = None
     
-    if not os.path.exists(model_path):
-        raise HTTPException(status_code=404, detail="Model not found")
+    if saved_model and saved_model.get("file_path"):
+        # Load from .py file
+        py_file_path = Path(saved_model["file_path"])
+        if py_file_path.exists():
+            try:
+                spec = importlib.util.spec_from_file_location(f"backtest_model_{request.model_id}", py_file_path)
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[f"backtest_model_{request.model_id}"] = module
+                spec.loader.exec_module(module)
+                
+                # Get model instance from module
+                model_instance = module.model
+                target_column = model_instance.TARGET_COLUMN
+                feature_columns = model_instance.FEATURE_COLUMNS
+            except Exception as e:
+                logger.error(f"Failed to load model from .py file: {e}")
+                raise HTTPException(status_code=500, detail=f"Failed to load model: {str(e)}")
+    
+    # Fallback to .joblib if .py not available (backward compatibility)
+    if model_instance is None:
+        model_path = os.path.join(MODEL_FOLDER, f"{request.model_id}_model.joblib")
+        scaler_path = os.path.join(MODEL_FOLDER, f"{request.model_id}_scaler.joblib")
+        
+        if not os.path.exists(model_path):
+            # Try saved models folder
+            saved_model_path = SAVED_MODELS_FOLDER / f"{request.model_id}_model.joblib"
+            saved_scaler_path = SAVED_MODELS_FOLDER / f"{request.model_id}_scaler.joblib"
+            if saved_model_path.exists():
+                model_path = str(saved_model_path)
+                scaler_path = str(saved_scaler_path) if saved_scaler_path.exists() else None
+        
+        if not os.path.exists(model_path):
+            raise HTTPException(status_code=404, detail="Model not found")
+        
+        # For backward compatibility, use old method
+        # But we still need target_column and feature_columns
+        if saved_model:
+            target_column = saved_model.get("target_column")
+            feature_columns = saved_model.get("feature_columns", [])
+        else:
+            raise HTTPException(status_code=400, detail="Model metadata not found. Please use a saved model with .py file.")
     
     try:
-        model = joblib.load(model_path)
-        scaler = joblib.load(scaler_path) if os.path.exists(scaler_path) else None
-        
         # Load test data
         df = pd.read_csv(request.test_data_path)
-        X = df[request.feature_columns].values
         
-        if scaler:
-            X = scaler.transform(X)
-        
-        # Make predictions
-        predictions = model.predict(X)
-        
-        # Get probabilities safely
-        if hasattr(model, 'predict_proba'):
-            try:
-                proba = model.predict_proba(X)
-                if proba.shape[1] == 2:
-                    probabilities = proba[:, 1]
-                else:
-                    probabilities = proba[:, 0]
-            except Exception:
-                probabilities = predictions.astype(float)
+        # Use model's column configuration
+        if model_instance:
+            # Use model's test method
+            if target_column and feature_columns:
+                # Prepare features using model's columns
+                missing_features = [col for col in feature_columns if col not in df.columns]
+                if missing_features:
+                    raise ValueError(f"Feature columns not found in data: {missing_features}")
+                
+                X_df = df[feature_columns].copy()
+                # Drop non-numeric columns
+                non_numeric_cols = X_df.select_dtypes(exclude=[np.number]).columns.tolist()
+                if non_numeric_cols:
+                    X_df = X_df.drop(columns=non_numeric_cols)
+                
+                X = X_df.values
+                
+                # Scale if scaler exists
+                if model_instance.scaler:
+                    X = model_instance.scaler.transform(X)
+                
+                # Use model's test method
+                predictions, probabilities = model_instance.test(X)
+            else:
+                raise ValueError("Model missing target_column or feature_columns configuration")
         else:
-            probabilities = predictions.astype(float)
+            # Fallback: load .joblib and use old method
+            model = joblib.load(model_path)
+            scaler = joblib.load(scaler_path) if scaler_path and os.path.exists(scaler_path) else None
+            
+            if not target_column or not feature_columns:
+                raise ValueError("Model metadata missing. Cannot determine target and feature columns.")
+            
+            X = df[feature_columns].values
+            if scaler:
+                X = scaler.transform(X)
+            
+            predictions = model.predict(X)
+            
+            if hasattr(model, 'predict_proba'):
+                try:
+                    proba = model.predict_proba(X)
+                    if proba.shape[1] == 2:
+                        probabilities = proba[:, 1]
+                    else:
+                        probabilities = proba[:, 0]
+                except Exception:
+                    probabilities = predictions.astype(float)
+            else:
+                probabilities = predictions.astype(float)
         
         # Check for OHLC columns
         has_ohlc = all(col in df.columns for col in ['open', 'high', 'low', 'close'])

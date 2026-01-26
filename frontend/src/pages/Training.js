@@ -15,7 +15,8 @@ import {
   Clock,
   Zap,
   Terminal,
-  BarChart3
+  BarChart3,
+  Save
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -65,7 +66,8 @@ const Training = () => {
     feature_columns: [],
     epochs: 100,
     batch_size: 32,
-    validation_split: 0.2
+    validation_split: 0.2,
+    nth_candle: null
   });
 
   const [availableColumns, setAvailableColumns] = useState([]);
@@ -191,6 +193,22 @@ const Training = () => {
     }
   };
 
+  const saveModel = async () => {
+    if (!activeSession || activeSession.status !== "completed") {
+      toast.error("Training must be completed before saving");
+      return;
+    }
+
+    try {
+      const response = await axios.post(`${API}/training/save/${activeSession.id}`);
+      toast.success(`Model saved successfully: ${response.data.model_name}`);
+      // Refresh data to show saved model
+      fetchData();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Failed to save model");
+    }
+  };
+
   const getStatusBadge = (status) => {
     switch (status) {
       case "running":
@@ -233,6 +251,12 @@ const Training = () => {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {activeSession && activeSession.status === "completed" && (
+            <Button onClick={saveModel} variant="default" data-testid="save-model-btn">
+              <Save className="w-4 h-4 mr-2" />
+              Save Model
+            </Button>
+          )}
           {training ? (
             <Button variant="destructive" onClick={stopTraining} data-testid="stop-training-btn">
               <Square className="w-4 h-4 mr-2" />
@@ -393,6 +417,30 @@ const Training = () => {
                 onChange={(e) => setConfig({ ...config, validation_split: parseFloat(e.target.value) })}
                 data-testid="validation-split-input"
               />
+            </div>
+
+            {/* Nth Candle Selector */}
+            <div className="space-y-2">
+              <Label>Nth Candle (for validation)</Label>
+              <Select
+                value={config.nth_candle?.toString() || ""}
+                onValueChange={(v) => setConfig({ ...config, nth_candle: v === "none" ? null : parseInt(v) })}
+              >
+                <SelectTrigger data-testid="nth-candle-select">
+                  <SelectValue placeholder="Select nth candle (optional)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">None</SelectItem>
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((num) => (
+                    <SelectItem key={num} value={num.toString()}>
+                      {num === 1 ? '1st' : num === 2 ? '2nd' : num === 3 ? '3rd' : `${num}th`} Candle
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Optional: Use nth candle for validation predictions during training
+              </p>
             </div>
           </CardContent>
         </Card>
