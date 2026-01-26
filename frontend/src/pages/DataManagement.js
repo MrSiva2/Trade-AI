@@ -11,7 +11,8 @@ import {
   ChevronRight,
   Loader2,
   HardDrive,
-  Plus
+  Plus,
+  Trash2
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -154,6 +155,31 @@ const DataManagement = () => {
     }
   };
 
+  const deleteFile = async (file) => {
+    if (!window.confirm(`Are you sure you want to delete ${file.name}?`)) return;
+
+    try {
+      await axios.delete(`${API}/data/files`, { params: { file_path: file.path } });
+      toast.success("File deleted successfully");
+      if (selectedFolder) selectFolder(selectedFolder);
+    } catch (error) {
+      toast.error("Failed to delete file");
+    }
+  };
+
+  const deleteFolder = async (folder) => {
+    if (!window.confirm(`Are you sure you want to delete folder ${folder.name} and all its contents?`)) return;
+
+    try {
+      await axios.delete(`${API}/data/folders`, { params: { folder_path: folder.path } });
+      toast.success("Folder deleted successfully");
+      if (selectedFolder?.path === folder.path) setSelectedFolder(null);
+      fetchFolders();
+    } catch (error) {
+      toast.error("Failed to delete folder");
+    }
+  };
+
   const formatFileSize = (bytes) => {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
@@ -231,16 +257,32 @@ const DataManagement = () => {
           <CardContent className="p-0">
             <ScrollArea className="h-[300px]">
               {folders.map((folder, index) => (
-                <button
+                <div
                   key={index}
-                  onClick={() => selectFolder(folder)}
-                  className={`file-item w-full ${selectedFolder?.path === folder.path ? 'file-item-selected' : ''
+                  className={`flex items-center group w-full ${selectedFolder?.path === folder.path ? 'bg-primary/10' : ''
                     }`}
-                  data-testid={`folder-item-${index}`}
                 >
-                  <FolderOpen className="w-5 h-5 text-primary" />
-                  <span className="truncate text-sm">{folder.name}</span>
-                </button>
+                  <button
+                    onClick={() => selectFolder(folder)}
+                    className={`file-item flex-1 text-left ${selectedFolder?.path === folder.path ? 'file-item-selected' : ''
+                      }`}
+                    data-testid={`folder-item-${index}`}
+                  >
+                    <FolderOpen className="w-5 h-5 text-primary" />
+                    <span className="truncate text-sm">{folder.name}</span>
+                  </button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteFolder(folder);
+                    }}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
+                </div>
               ))}
             </ScrollArea>
             <div className="p-3 border-t border-border">
@@ -313,15 +355,26 @@ const DataManagement = () => {
                         {file.columns?.length || '-'}
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => previewFile(file)}
-                          data-testid={`preview-btn-${index}`}
-                        >
-                          <Eye className="w-4 h-4 mr-1" />
-                          Preview
-                        </Button>
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => previewFile(file)}
+                            data-testid={`preview-btn-${index}`}
+                          >
+                            <Eye className="w-4 h-4 mr-1" />
+                            Preview
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-muted-foreground hover:text-destructive"
+                            onClick={() => deleteFile(file)}
+                            data-testid={`delete-btn-${index}`}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}

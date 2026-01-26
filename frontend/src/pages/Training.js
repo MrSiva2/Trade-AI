@@ -58,6 +58,7 @@ const Training = () => {
 
   const [config, setConfig] = useState({
     model_id: "",
+    model_name: "",
     train_data_path: "",
     test_data_path: "",
     target_column: "",
@@ -74,7 +75,7 @@ const Training = () => {
   }, []);
 
   useEffect(() => {
-    if (activeSession) {
+    if (activeSession && (activeSession.status === "pending" || activeSession.status === "running")) {
       const interval = setInterval(() => {
         fetchSessionStatus(activeSession.id);
         fetchLogs(activeSession.id);
@@ -276,6 +277,20 @@ const Training = () => {
               </Select>
             </div>
 
+            {/* Model Name */}
+            <div className="space-y-2">
+              <Label>Save Model As</Label>
+              <Input
+                placeholder="Enter model name..."
+                value={config.model_name}
+                onChange={(e) => setConfig({ ...config, model_name: e.target.value })}
+                data-testid="model-name-input"
+              />
+              <p className="text-[10px] text-muted-foreground">
+                Optional: If empty, a default name will be generated.
+              </p>
+            </div>
+
             {/* Training Data */}
             <div className="space-y-2">
               <Label>Training Data</Label>
@@ -332,8 +347,8 @@ const Training = () => {
                         setConfig({ ...config, feature_columns: newFeatures });
                       }}
                       className={`px-2 py-1 text-xs rounded transition-colors ${config.feature_columns.includes(col)
-                          ? 'bg-primary text-primary-foreground'
-                          : 'bg-accent hover:bg-accent/80'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-accent hover:bg-accent/80'
                         }`}
                     >
                       {col}
@@ -540,8 +555,8 @@ const Training = () => {
                           <div
                             key={i}
                             className={`log-entry ${log.level === 'ERROR' ? 'log-error' :
-                                log.level === 'WARNING' ? 'log-warning' :
-                                  log.level === 'SUCCESS' ? 'log-success' : 'log-info'
+                              log.level === 'WARNING' ? 'log-warning' :
+                                log.level === 'SUCCESS' ? 'log-success' : 'log-info'
                               }`}
                           >
                             <span className="text-muted-foreground mr-2">

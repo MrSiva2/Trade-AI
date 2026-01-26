@@ -7,3 +7,5 @@
 # It is mentioned to just keep track to roll back and continue with different features.
 
 # the "add file" commit has added the functionality of adding a csv file/ a new folder to the data management page.
+
+# the "train_page" commit had added the training functionality to the train page. But, it is not saving the model's name as intended

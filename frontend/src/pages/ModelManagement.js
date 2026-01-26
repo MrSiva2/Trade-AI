@@ -13,7 +13,8 @@ import {
   Check,
   Loader2,
   FolderInput,
-  Save
+  Save,
+  Trash2
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -87,7 +88,7 @@ const ModelManagement = () => {
 
     const allowedExtensions = ['.joblib', '.h5', '.keras'];
     const fileExt = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
-    
+
     if (!allowedExtensions.includes(fileExt)) {
       toast.error(`Invalid file type. Allowed: ${allowedExtensions.join(', ')}`);
       return;
@@ -144,6 +145,20 @@ const ModelManagement = () => {
     }
   };
 
+  const deleteModel = async (modelId, type) => {
+    if (!window.confirm("Are you sure you want to delete this model?")) return;
+
+    try {
+      const endpoint = type === "custom" ? `/models/custom/${modelId}` : `/models/saved/${modelId}`;
+      await axios.delete(`${API}${endpoint}`);
+      toast.success("Model deleted successfully");
+      if (selectedModel?.id === modelId) setSelectedModel(null);
+      fetchModels();
+    } catch (error) {
+      toast.error("Failed to delete model");
+    }
+  };
+
   const addLayer = () => {
     setCustomConfig({
       ...customConfig,
@@ -180,34 +195,54 @@ const ModelManagement = () => {
             <Save className="w-5 h-5 text-cyan-400" />
           )}
         </div>
-        {selectedModel?.id === model.id && (
-          <Check className="w-5 h-5 text-primary" />
-        )}
+        <div className="flex gap-1">
+          {selectedModel?.id === model.id && (
+            <Check className="w-5 h-5 text-primary" />
+          )}
+          {type !== "prebuilt" && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
+              onClick={(e) => {
+                e.stopPropagation();
+                deleteModel(model.id, type);
+              }}
+              data-testid={`delete-model-${model.id}`}
+            >
+              <Trash2 className="w-4 h-4" />
+            </Button>
+          )}
+        </div>
       </div>
       <h3 className="font-semibold text-sm mb-1">{model.name}</h3>
       <p className="text-xs text-muted-foreground mb-2">
         {model.type?.replace(/_/g, ' ').toUpperCase()}
       </p>
-      {model.description && (
-        <p className="text-xs text-muted-foreground line-clamp-2">
-          {model.description}
-        </p>
-      )}
-      {model.parameters && (
-        <div className="mt-3 pt-3 border-t border-border">
-          <div className="flex flex-wrap gap-1">
-            {Object.entries(model.parameters).slice(0, 3).map(([key, value]) => (
-              <span
-                key={key}
-                className="px-1.5 py-0.5 text-xs font-mono bg-accent rounded"
-              >
-                {key}: {value}
-              </span>
-            ))}
+      {
+        model.description && (
+          <p className="text-xs text-muted-foreground line-clamp-2">
+            {model.description}
+          </p>
+        )
+      }
+      {
+        model.parameters && (
+          <div className="mt-3 pt-3 border-t border-border">
+            <div className="flex flex-wrap gap-1">
+              {Object.entries(model.parameters).slice(0, 3).map(([key, value]) => (
+                <span
+                  key={key}
+                  className="px-1.5 py-0.5 text-xs font-mono bg-accent rounded"
+                >
+                  {key}: {value}
+                </span>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
-    </div>
+        )
+      }
+    </div >
   );
 
   if (loading) {

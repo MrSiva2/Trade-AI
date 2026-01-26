@@ -85,6 +85,7 @@ class CustomModelConfig(BaseModel):
 
 class TrainingRequest(BaseModel):
     model_id: str
+    model_name: Optional[str] = None
     train_data_path: str
     test_data_path: Optional[str] = None
     target_column: str
@@ -106,6 +107,7 @@ class TrainingSession(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     model_id: str
+    model_name: Optional[str] = None
     status: str = "pending"  # pending, running, completed, failed, stopped
     current_epoch: int = 0
     total_epochs: int = 0
@@ -205,12 +207,42 @@ async def run_training(session_id: str, request: TrainingRequest, model_config: 
         add_log(session_id, f"Loaded {len(df)} rows with {len(df.columns)} columns")
         
         # Prepare features and target
-        X = df[request.feature_columns].values
+        # Filter out non-numeric columns from features
+        feature_cols = request.feature_columns
+        X_df = df[feature_cols]
+        
+        # Identify non-numeric columns
+        non_numeric_cols = X_df.select_dtypes(exclude=[np.number]).columns.tolist()
+        if non_numeric_cols:
+            add_log(session_id, f"Dropping non-numeric columns: {non_numeric_cols}", "WARNING")
+            X_df = X_df.drop(columns=non_numeric_cols)
+            
+        if X_df.empty:
+            raise ValueError("No numeric features available for training")
+            
+        X = X_df.values
         y = df[request.target_column].values
         
-        # Create binary labels if continuous
+        add_log(session_id, f"Training with {X.shape[1]} features: {list(X_df.columns)}")
+        
+        
+        add_log(session_id, f"Training with {X.shape[1]} features: {list(X_df.columns)}")
+        
+        # Create binary labels if continuous or if target has only one class
+        # For classification, we need at least 2 classes
         if y.dtype == float:
-            y = (y > 0).astype(int)
+             # Calculate median to split into two classes
+            threshold = np.median(y)
+            y_binary = (y > threshold).astype(int)
+            add_log(session_id, f"Target column '{request.target_column}' is continuous. Converted to binary classes (Threshold: {threshold:.4f})", "WARNING")
+            y = y_binary
+        
+        # Verify class distribution
+        unique_classes = np.unique(y)
+        if len(unique_classes) < 2:
+            raise ValueError(f"Target column '{request.target_column}' contains only one class: {unique_classes}. Classification requires at least two classes (e.g., 0 and 1).")
+            
+        add_log(session_id, f"Target distribution: {dict(zip(*np.unique(y, return_counts=True)))}")
         
         # Split data
         X_train, X_val, y_train, y_val = train_test_split(
@@ -302,6 +334,19 @@ async def run_training(session_id: str, request: TrainingRequest, model_config: 
             {"$set": training_sessions[session_id]},
             upsert=True
         )
+
+        # Store saved model metadata
+        try:
+            await db.saved_models.insert_one({
+                "id": session_id,
+                "name": request.model_name or f"Model_{session_id[:8]}",
+                "model_type": model_config.get("type", "unknown"),
+                "file_path": model_path,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            })
+        except Exception as e:
+            logger.error(f"Failed to save model metadata to DB: {e}")
+            # Even if DB is down, the model file is saved on disk
         
     except Exception as e:
         training_sessions[session_id]["status"] = "failed"
@@ -415,6 +460,32 @@ async def list_csv_files(folder: str = None, lightweight: bool = Query(default=F
     
     return {"files": files}
 
+@api_router.delete("/data/files")
+async def delete_csv_file(file_path: str):
+    """Delete a CSV file"""
+    try:
+        path = Path(file_path)
+        if path.exists() and path.is_file() and path.suffix.lower() == '.csv':
+            os.remove(path)
+            return {"success": True}
+        else:
+            raise HTTPException(status_code=404, detail="File not found or not a CSV")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@api_router.delete("/data/folders")
+async def delete_folder(folder_path: str):
+    """Delete a folder and its contents"""
+    try:
+        path = Path(folder_path)
+        if path.exists() and path.is_dir():
+            import shutil
+            shutil.rmtree(path)
+            return {"success": True}
+        else:
+            raise HTTPException(status_code=404, detail="Folder not found")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 @api_router.get("/data/preview")
 async def preview_csv(file_path: str, rows: int = 100):
     """Preview CSV file content"""
@@ -498,28 +569,92 @@ async def create_custom_model(config: CustomModelConfig):
 
 @api_router.get("/models/saved")
 async def get_saved_models():
-    """Get list of saved trained models"""
+    """Get list of saved trained models with metadata"""
     models = []
-    model_path = Path(MODEL_FOLDER)
     
-    if model_path.exists():
-        for file in model_path.glob("*_model.joblib"):
-            try:
-                # Cache stat() call to avoid calling it twice
-                stat_info = file.stat()
-                session_id = file.stem.replace("_model", "")
-                models.append({
-                    "id": session_id,
-                    "path": str(file),
-                    "name": file.name,
-                    "size": stat_info.st_size,
-                    "created_at": datetime.fromtimestamp(stat_info.st_mtime).isoformat()
-                })
-            except Exception:
-                # Skip files that can't be accessed
-                continue
+    try:
+        # Get metadata from MongoDB
+        metadata_list = await db.saved_models.find({}, {"_id": 0}).to_list(1000)
+        metadata_map = {m["id"]: m for m in metadata_list}
+        
+        model_path = Path(MODEL_FOLDER)
+        if model_path.exists():
+            for file in model_path.glob("*_model.joblib"):
+                try:
+                    stat_info = file.stat()
+                    session_id = file.stem.replace("_model", "")
+                    
+                    # Use metadata if available, otherwise fallback to in-memory session or filename
+                    meta = metadata_map.get(session_id, {})
+                    
+                    # Try to get from active sessions if not in DB
+                    session_info = training_sessions.get(session_id, {})
+                    
+                    name = meta.get("name") or session_info.get("model_name") or file.name
+                    model_type = meta.get("model_type") or session_info.get("model_id", "unknown")
+
+                    models.append({
+                        "id": session_id,
+                        "path": str(file),
+                        "name": name,
+                        "type": model_type,
+                        "size": stat_info.st_size,
+                        "created_at": meta.get("created_at") or session_info.get("started_at") or datetime.fromtimestamp(stat_info.st_mtime).isoformat()
+                    })
+                except Exception:
+                    continue
+    except Exception as e:
+        logger.error(f"Error fetching saved models: {e}")
+        # Fallback to just scanning the folder if MongoDB fails
+        model_path = Path(MODEL_FOLDER)
+        if model_path.exists():
+            for file in model_path.glob("*_model.joblib"):
+                try:
+                    stat_info = file.stat()
+                    session_id = file.stem.replace("_model", "")
+                    models.append({
+                        "id": session_id,
+                        "path": str(file),
+                        "name": file.name,
+                        "size": stat_info.st_size,
+                        "created_at": datetime.fromtimestamp(stat_info.st_mtime).isoformat()
+                    })
+                except Exception:
+                    continue
     
+    # Sort by created_at descending
+    models.sort(key=lambda x: x.get("created_at", ""), reverse=True)
     return {"models": models}
+
+@api_router.delete("/models/saved/{model_id}")
+async def delete_saved_model(model_id: str):
+    """Delete a saved model and its metadata"""
+    try:
+        # Delete from filesystem
+        model_path = os.path.join(MODEL_FOLDER, f"{model_id}_model.joblib")
+        scaler_path = os.path.join(MODEL_FOLDER, f"{model_id}_scaler.joblib")
+        
+        if os.path.exists(model_path):
+            os.remove(model_path)
+        if os.path.exists(scaler_path):
+            os.remove(scaler_path)
+            
+        # Delete from MongoDB
+        await db.saved_models.delete_one({"id": model_id})
+        await db.training_sessions.delete_one({"id": model_id})
+        
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@api_router.delete("/models/custom/{model_id}")
+async def delete_custom_model(model_id: str):
+    """Delete a custom model configuration"""
+    try:
+        await db.custom_models.delete_one({"id": model_id})
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @api_router.post("/models/import")
 async def import_model(folder: FolderPath):
@@ -625,6 +760,7 @@ async def start_training(request: TrainingRequest, background_tasks: BackgroundT
     training_sessions[session_id] = {
         "id": session_id,
         "model_id": request.model_id,
+        "model_name": request.model_name,
         "status": "pending",
         "current_epoch": 0,
         "total_epochs": request.epochs,
