@@ -53,23 +53,27 @@ const Dashboard = () => {
     try {
       const [statsRes, sessionsRes, performanceRes] = await Promise.all([
         axios.get(`${API}/dashboard/stats`),
-        axios.get(`${API}/training/sessions`),
+        axios.get(`${API}/training/sessions`, { params: { lightweight: true } }),
         axios.get(`${API}/dashboard/model-performance`)
       ]);
-      
+
       setStats(statsRes.data);
-      setSessions(sessionsRes.data.sessions || []);
+      const allSessions = sessionsRes.data.sessions || [];
+      setSessions(allSessions);
       setModelPerformance(performanceRes.data.performance || []);
-      
-      // Auto-select first session (running or most recent)
-      if (!selectedSession && sessionsRes.data.sessions?.length > 0) {
-        setSelectedSession(sessionsRes.data.sessions[0]);
+
+      // Select session to show in chart
+      let sessionToUpdate = null;
+      if (!selectedSession && allSessions.length > 0) {
+        sessionToUpdate = allSessions[0];
       } else if (selectedSession) {
-        // Update selected session with latest data
-        const updated = sessionsRes.data.sessions?.find(s => s.id === selectedSession.id);
-        if (updated) {
-          setSelectedSession(updated);
-        }
+        sessionToUpdate = allSessions.find(s => s.id === selectedSession.id) || selectedSession;
+      }
+
+      if (sessionToUpdate) {
+        // Fetch full session details (with metrics) for the chart
+        const fullSessionRes = await axios.get(`${API}/training/status/${sessionToUpdate.id}`);
+        setSelectedSession(fullSessionRes.data);
       }
     } catch (error) {
       console.error("Failed to fetch dashboard data:", error);
@@ -176,11 +180,10 @@ const Dashboard = () => {
               <CardTitle className="panel-title">Training Progress</CardTitle>
               <div className="flex items-center gap-2">
                 {selectedSession && (
-                  <span className={`badge ${
-                    selectedSession.status === "running" ? "status-running" :
-                    selectedSession.status === "completed" ? "status-completed" :
-                    selectedSession.status === "failed" ? "status-failed" : "status-pending"
-                  }`}>
+                  <span className={`badge ${selectedSession.status === "running" ? "status-running" :
+                      selectedSession.status === "completed" ? "status-completed" :
+                        selectedSession.status === "failed" ? "status-failed" : "status-pending"
+                    }`}>
                     {selectedSession.status}
                   </span>
                 )}
@@ -221,38 +224,38 @@ const Dashboard = () => {
                 </Select>
               </div>
             )}
-            
+
             <div className="h-[250px]">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={selectedSession?.metrics?.loss?.length > 0 
+                <AreaChart data={selectedSession?.metrics?.loss?.length > 0
                   ? selectedSession.metrics.loss.map((loss, i) => ({
-                      epoch: i + 1,
-                      loss,
-                      accuracy: selectedSession.metrics.accuracy?.[i] || 0
-                    }))
+                    epoch: i + 1,
+                    loss,
+                    accuracy: selectedSession.metrics.accuracy?.[i] || 0
+                  }))
                   : mockTrainingData
                 }>
                   <defs>
                     <linearGradient id="lossGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3}/>
-                      <stop offset="95%" stopColor="#6366f1" stopOpacity={0}/>
+                      <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
                     </linearGradient>
                     <linearGradient id="accGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3}/>
-                      <stop offset="95%" stopColor="#22c55e" stopOpacity={0}/>
+                      <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(240 4% 20%)" />
-                  <XAxis 
-                    dataKey="epoch" 
-                    stroke="hsl(240 5% 45%)" 
+                  <XAxis
+                    dataKey="epoch"
+                    stroke="hsl(240 5% 45%)"
                     tick={{ fill: 'hsl(240 5% 65%)', fontSize: 11 }}
                   />
-                  <YAxis 
-                    stroke="hsl(240 5% 45%)" 
+                  <YAxis
+                    stroke="hsl(240 5% 45%)"
                     tick={{ fill: 'hsl(240 5% 65%)', fontSize: 11 }}
                   />
-                  <Tooltip 
+                  <Tooltip
                     contentStyle={{
                       background: 'hsl(240 6% 9%)',
                       border: '1px solid hsl(240 4% 20%)',
@@ -260,17 +263,17 @@ const Dashboard = () => {
                       color: 'hsl(0 0% 98%)'
                     }}
                   />
-                  <Area 
-                    type="monotone" 
-                    dataKey="loss" 
-                    stroke="#6366f1" 
+                  <Area
+                    type="monotone"
+                    dataKey="loss"
+                    stroke="#6366f1"
                     fill="url(#lossGradient)"
                     strokeWidth={2}
                   />
-                  <Area 
-                    type="monotone" 
-                    dataKey="accuracy" 
-                    stroke="#22c55e" 
+                  <Area
+                    type="monotone"
+                    dataKey="accuracy"
+                    stroke="#22c55e"
                     fill="url(#accGradient)"
                     strokeWidth={2}
                   />
@@ -285,8 +288,8 @@ const Dashboard = () => {
                     {selectedSession.current_epoch}/{selectedSession.total_epochs}
                   </span>
                 </div>
-                <Progress 
-                  value={(selectedSession.current_epoch / selectedSession.total_epochs) * 100} 
+                <Progress
+                  value={(selectedSession.current_epoch / selectedSession.total_epochs) * 100}
                 />
               </div>
             )}
@@ -340,16 +343,16 @@ const Dashboard = () => {
                   </div>
                   <div className="mt-3">
                     <div className="h-2 bg-muted rounded-full overflow-hidden flex">
-                      <div 
+                      <div
                         className="bg-green-500 h-full"
-                        style={{ 
-                          width: `${(stats.latest_backtest.winning_trades / Math.max(1, stats.latest_backtest.total_trades)) * 100}%` 
+                        style={{
+                          width: `${(stats.latest_backtest.winning_trades / Math.max(1, stats.latest_backtest.total_trades)) * 100}%`
                         }}
                       />
-                      <div 
+                      <div
                         className="bg-red-500 h-full"
-                        style={{ 
-                          width: `${(stats.latest_backtest.losing_trades / Math.max(1, stats.latest_backtest.total_trades)) * 100}%` 
+                        style={{
+                          width: `${(stats.latest_backtest.losing_trades / Math.max(1, stats.latest_backtest.total_trades)) * 100}%`
                         }}
                       />
                     </div>
@@ -378,18 +381,18 @@ const Dashboard = () => {
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={modelPerformance}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(240 4% 20%)" />
-                  <XAxis 
-                    dataKey="model_id" 
-                    stroke="hsl(240 5% 45%)" 
+                  <XAxis
+                    dataKey="model_id"
+                    stroke="hsl(240 5% 45%)"
                     tick={{ fill: 'hsl(240 5% 65%)', fontSize: 10 }}
                     tickFormatter={(value) => value.slice(0, 8)}
                   />
-                  <YAxis 
-                    stroke="hsl(240 5% 45%)" 
+                  <YAxis
+                    stroke="hsl(240 5% 45%)"
                     tick={{ fill: 'hsl(240 5% 65%)', fontSize: 11 }}
                     label={{ value: 'Return (%)', angle: -90, position: 'insideLeft', fill: 'hsl(240 5% 65%)' }}
                   />
-                  <Tooltip 
+                  <Tooltip
                     contentStyle={{
                       background: 'hsl(240 6% 9%)',
                       border: '1px solid hsl(240 4% 20%)',
@@ -435,7 +438,7 @@ const Dashboard = () => {
         </CardHeader>
         <CardContent className="p-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <button 
+            <button
               onClick={() => window.location.href = '/data'}
               className="flex flex-col items-center gap-2 p-4 rounded-md bg-accent hover:bg-accent/80 transition-colors"
               data-testid="action-upload-data"
@@ -445,7 +448,7 @@ const Dashboard = () => {
               </div>
               <span className="text-sm font-medium">Upload Data</span>
             </button>
-            <button 
+            <button
               onClick={() => window.location.href = '/models'}
               className="flex flex-col items-center gap-2 p-4 rounded-md bg-accent hover:bg-accent/80 transition-colors"
               data-testid="action-new-model"
@@ -455,7 +458,7 @@ const Dashboard = () => {
               </div>
               <span className="text-sm font-medium">New Model</span>
             </button>
-            <button 
+            <button
               onClick={() => window.location.href = '/training'}
               className="flex flex-col items-center gap-2 p-4 rounded-md bg-accent hover:bg-accent/80 transition-colors"
               data-testid="action-start-training"
@@ -465,7 +468,7 @@ const Dashboard = () => {
               </div>
               <span className="text-sm font-medium">Start Training</span>
             </button>
-            <button 
+            <button
               onClick={() => window.location.href = '/backtest'}
               className="flex flex-col items-center gap-2 p-4 rounded-md bg-accent hover:bg-accent/80 transition-colors"
               data-testid="action-run-backtest"

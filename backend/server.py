@@ -86,12 +86,13 @@ class CustomModelConfig(BaseModel):
 class TrainingRequest(BaseModel):
     model_id: str
     train_data_path: str
-    test_data_path: Optional[str] = None
+    test_data_path: Optional[str] = None  # Optional - if not provided, will split from train_data_path
     target_column: str
     feature_columns: List[str]
     epochs: int = 100
     batch_size: int = 32
     validation_split: float = 0.2
+    train_test_split_ratio: float = 0.8  # Portion for training (0.8 = 80% train, 20% test)
 
 class BacktestRequest(BaseModel):
     model_id: str
@@ -204,17 +205,24 @@ async def run_training(session_id: str, request: TrainingRequest, model_config: 
         df = pd.read_csv(request.train_data_path)
         add_log(session_id, f"Loaded {len(df)} rows with {len(df.columns)} columns")
         
-        # Prepare features and target
-        X = df[request.feature_columns].values
-        y = df[request.target_column].values
+        # Sequential train/test split (first portion = train, last portion = test)
+        split_idx = int(len(df) * request.train_test_split_ratio)
+        df_train = df.iloc[:split_idx]
+        df_test = df.iloc[split_idx:]
+        
+        add_log(session_id, f"Split data: {len(df_train)} training rows ({request.train_test_split_ratio*100:.0f}%), {len(df_test)} test rows ({(1-request.train_test_split_ratio)*100:.0f}%)")
+        
+        # Prepare features and target from training portion
+        X_train_full = df_train[request.feature_columns].values
+        y_train_full = df_train[request.target_column].values
         
         # Create binary labels if continuous
-        if y.dtype == float:
-            y = (y > 0).astype(int)
+        if y_train_full.dtype == float:
+            y_train_full = (y_train_full > 0).astype(int)
         
-        # Split data
+        # Further split training data into train/validation for monitoring
         X_train, X_val, y_train, y_val = train_test_split(
-            X, y, test_size=request.validation_split, random_state=42
+            X_train_full, y_train_full, test_size=request.validation_split, random_state=42
         )
         
         # Scale features

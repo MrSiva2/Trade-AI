@@ -64,7 +64,8 @@ const Training = () => {
     feature_columns: [],
     epochs: 100,
     batch_size: 32,
-    validation_split: 0.2
+    validation_split: 0.2,
+    train_test_split_ratio: 0.8  // 80% for training, 20% for testing
   });
 
   const [availableColumns, setAvailableColumns] = useState([]);
@@ -114,7 +115,7 @@ const Training = () => {
     try {
       const response = await axios.get(`${API}/training/status/${sessionId}`);
       setActiveSession(response.data);
-      
+
       if (response.data.status === "completed" || response.data.status === "failed") {
         setTraining(false);
         toast.success(`Training ${response.data.status}`);
@@ -331,11 +332,10 @@ const Training = () => {
                           : [...config.feature_columns, col];
                         setConfig({ ...config, feature_columns: newFeatures });
                       }}
-                      className={`px-2 py-1 text-xs rounded transition-colors ${
-                        config.feature_columns.includes(col)
-                          ? 'bg-primary text-primary-foreground'
-                          : 'bg-accent hover:bg-accent/80'
-                      }`}
+                      className={`px-2 py-1 text-xs rounded transition-colors ${config.feature_columns.includes(col)
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-accent hover:bg-accent/80'
+                        }`}
                     >
                       {col}
                     </button>
@@ -368,6 +368,7 @@ const Training = () => {
               </div>
             </div>
 
+
             <div className="space-y-2">
               <Label>Validation Split</Label>
               <Input
@@ -380,6 +381,31 @@ const Training = () => {
                 data-testid="validation-split-input"
               />
             </div>
+
+            {/* Train/Test Split Ratio */}
+            <div className="space-y-2">
+              <Label>Train/Test Split Ratio</Label>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="range"
+                  min="0.5"
+                  max="0.95"
+                  step="0.05"
+                  value={config.train_test_split_ratio}
+                  onChange={(e) => setConfig({ ...config, train_test_split_ratio: parseFloat(e.target.value) })}
+                  className="flex-1"
+                  data-testid="train-test-split-input"
+                />
+                <span className="font-mono text-sm w-12 text-right">
+                  {(config.train_test_split_ratio * 100).toFixed(0)}%
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                First {(config.train_test_split_ratio * 100).toFixed(0)}% for training,
+                last {((1 - config.train_test_split_ratio) * 100).toFixed(0)}% for testing
+              </p>
+            </div>
+
           </CardContent>
         </Card>
 
@@ -402,11 +428,11 @@ const Training = () => {
                       {((activeSession.current_epoch / activeSession.total_epochs) * 100).toFixed(1)}%
                     </span>
                   </div>
-                  <Progress 
+                  <Progress
                     value={(activeSession.current_epoch / activeSession.total_epochs) * 100}
                     className="h-2"
                   />
-                  
+
                   {/* Metrics Grid */}
                   <div className="grid grid-cols-4 gap-4 pt-4">
                     <div>
@@ -450,16 +476,16 @@ const Training = () => {
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={chartData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="hsl(240 4% 20%)" />
-                      <XAxis 
-                        dataKey="epoch" 
+                      <XAxis
+                        dataKey="epoch"
                         stroke="hsl(240 5% 45%)"
                         tick={{ fill: 'hsl(240 5% 65%)', fontSize: 11 }}
                       />
-                      <YAxis 
+                      <YAxis
                         stroke="hsl(240 5% 45%)"
                         tick={{ fill: 'hsl(240 5% 65%)', fontSize: 11 }}
                       />
-                      <Tooltip 
+                      <Tooltip
                         contentStyle={{
                           background: 'hsl(240 6% 9%)',
                           border: '1px solid hsl(240 4% 20%)',
@@ -468,35 +494,35 @@ const Training = () => {
                         }}
                       />
                       <Legend />
-                      <Line 
-                        type="monotone" 
-                        dataKey="loss" 
-                        stroke="#ef4444" 
+                      <Line
+                        type="monotone"
+                        dataKey="loss"
+                        stroke="#ef4444"
                         strokeWidth={2}
                         dot={false}
                         name="Training Loss"
                       />
-                      <Line 
-                        type="monotone" 
-                        dataKey="accuracy" 
-                        stroke="#22c55e" 
+                      <Line
+                        type="monotone"
+                        dataKey="accuracy"
+                        stroke="#22c55e"
                         strokeWidth={2}
                         dot={false}
                         name="Training Accuracy"
                       />
-                      <Line 
-                        type="monotone" 
-                        dataKey="val_loss" 
-                        stroke="#f97316" 
+                      <Line
+                        type="monotone"
+                        dataKey="val_loss"
+                        stroke="#f97316"
                         strokeWidth={2}
                         strokeDasharray="5 5"
                         dot={false}
                         name="Validation Loss"
                       />
-                      <Line 
-                        type="monotone" 
-                        dataKey="val_accuracy" 
-                        stroke="#06b6d4" 
+                      <Line
+                        type="monotone"
+                        dataKey="val_accuracy"
+                        stroke="#06b6d4"
                         strokeWidth={2}
                         strokeDasharray="5 5"
                         dot={false}
@@ -538,13 +564,12 @@ const Training = () => {
                         <p className="text-muted-foreground p-2">No logs yet...</p>
                       ) : (
                         logs.map((log, i) => (
-                          <div 
-                            key={i} 
-                            className={`log-entry ${
-                              log.level === 'ERROR' ? 'log-error' :
+                          <div
+                            key={i}
+                            className={`log-entry ${log.level === 'ERROR' ? 'log-error' :
                               log.level === 'WARNING' ? 'log-warning' :
-                              log.level === 'SUCCESS' ? 'log-success' : 'log-info'
-                            }`}
+                                log.level === 'SUCCESS' ? 'log-success' : 'log-info'
+                              }`}
                           >
                             <span className="text-muted-foreground mr-2">
                               [{new Date(log.timestamp).toLocaleTimeString()}]
