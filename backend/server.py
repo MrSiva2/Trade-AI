@@ -353,7 +353,10 @@ async def run_training(session_id: str, request: TrainingRequest, model_instance
         
         # Store model instance in separate global dict for later saving (not in training_sessions)
         model_instances[session_id] = model_instance
-        training_sessions[session_id]["model_name"] = request.model_name
+        # Don't overwrite model_name if request.model_name is empty
+        if request.model_name:
+            training_sessions[session_id]["model_name"] = request.model_name
+            
         training_sessions[session_id]["target_column"] = request.target_column
         training_sessions[session_id]["feature_columns"] = request.feature_columns
         

@@ -49,7 +49,8 @@ import {
   Scatter,
   Cell,
   AreaChart,
-  Area
+  Area,
+  Legend
 } from "recharts";
 
 const Backtesting = () => {
@@ -324,44 +325,178 @@ const Backtesting = () => {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4" data-testid="backtest-metrics">
                 <MetricCard
                   title="Total Return"
-                  value={`${currentResult.total_return >= 0 ? '+' : ''}${currentResult.total_return.toFixed(2)}%`}
-                  icon={currentResult.total_return >= 0 ? TrendingUp : TrendingDown}
-                  positive={currentResult.total_return >= 0}
+                  value={`${(currentResult?.total_return || 0) >= 0 ? '+' : ''}${(currentResult?.total_return || 0).toFixed(2)}%`}
+                  icon={(currentResult?.total_return || 0) >= 0 ? TrendingUp : TrendingDown}
+                  positive={(currentResult?.total_return || 0) >= 0}
                 />
                 <MetricCard
                   title="Sharpe Ratio"
-                  value={currentResult.sharpe_ratio.toFixed(2)}
+                  value={(currentResult?.sharpe_ratio || 0).toFixed(2)}
                   icon={Target}
-                  positive={currentResult.sharpe_ratio > 1}
+                  positive={(currentResult?.sharpe_ratio || 0) > 1}
                 />
                 <MetricCard
                   title="Max Drawdown"
-                  value={`-${currentResult.max_drawdown.toFixed(2)}%`}
+                  value={`-${(currentResult?.max_drawdown || 0).toFixed(2)}%`}
                   icon={ArrowDownRight}
                   positive={false}
                 />
                 <MetricCard
                   title="Total Trades"
-                  value={currentResult.total_trades}
+                  value={currentResult?.total_trades || 0}
                   icon={Activity}
-                  subtitle={`Win: ${currentResult.winning_trades} | Loss: ${currentResult.losing_trades}`}
+                  subtitle={`Win: ${currentResult?.winning_trades || 0} | Loss: ${currentResult?.losing_trades || 0}`}
                 />
               </div>
 
-              {/* TradingView-style Chart */}
-              <Card className="panel" data-testid="backtest-chart">
-                <CardHeader className="panel-header">
-                  <CardTitle className="panel-title">
-                    <LineChartIcon className="w-4 h-4 mr-2 inline" />
-                    Price Chart with Trade Executions
+              {/* Price Action Chart */}
+              <Card className="panel" data-testid="price-chart">
+                <CardHeader className="panel-header py-3">
+                  <CardTitle className="panel-title text-base font-medium flex items-center">
+                    <LineChartIcon className="w-4 h-4 mr-2" />
+                    Price Action & Signal Markers
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="p-4">
-                  <div className="w-full h-[400px] flex items-center justify-center text-muted-foreground">
-                    <p>Chart visualization coming soon</p>
+                <CardContent className="p-4 pt-2">
+                  <div className="w-full h-[350px]">
+                    {currentResult.price_data && currentResult.price_data.length > 0 ? (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <ComposedChart data={currentResult.price_data}>
+                          <defs>
+                            <linearGradient id="colorClose" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
+                              <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#262626" vertical={false} />
+                          <XAxis
+                            dataKey="time"
+                            stroke="#525252"
+                            tick={{ fill: '#a3a3a3', fontSize: 10 }}
+                            minTickGap={50}
+                            axisLine={false}
+                            tickLine={false}
+                          />
+                          <YAxis
+                            domain={['auto', 'auto']}
+                            stroke="#525252"
+                            tick={{ fill: '#a3a3a3', fontSize: 11 }}
+                            axisLine={false}
+                            tickLine={false}
+                            tickFormatter={(val) => `$${val.toFixed(0)}`}
+                          />
+                          <Tooltip
+                            contentStyle={{
+                              background: '#0a0a0a',
+                              border: '1px solid #262626',
+                              borderRadius: '8px',
+                              boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.5)',
+                              color: '#f5f5f5'
+                            }}
+                          />
+                          <Legend verticalAlign="top" height={36} iconType="circle" />
+                          <Area
+                            type="linear"
+                            dataKey="close"
+                            stroke="#3b82f6"
+                            strokeWidth={2}
+                            fillOpacity={1}
+                            fill="url(#colorClose)"
+                            name="Price"
+                            isAnimationActive={false}
+                          />
+                          {/* BUY Markers */}
+                          <Scatter
+                            name="BUY Order"
+                            data={currentResult.trades?.filter(t => t.type === 'BUY')}
+                            dataKey="price"
+                            fill="#22c55e"
+                          >
+                            {currentResult.trades?.filter(t => t.type === 'BUY').map((entry, index) => (
+                              <Cell key={`buy-${index}`} fill="#22c55e" stroke="#fff" strokeWidth={0.5} r={1.5} />
+                            ))}
+                          </Scatter>
+                          {/* SELL Markers */}
+                          <Scatter
+                            name="SELL Order"
+                            data={currentResult.trades?.filter(t => t.type === 'SELL')}
+                            dataKey="price"
+                            fill="#ef4444"
+                          >
+                            {currentResult.trades?.filter(t => t.type === 'SELL').map((entry, index) => (
+                              <Cell key={`sell-${index}`} fill="#ef4444" stroke="#fff" strokeWidth={0.5} r={1.5} />
+                            ))}
+                          </Scatter>
+                        </ComposedChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center h-full text-muted-foreground bg-accent/5 rounded-lg border border-dashed">
+                        <LineChartIcon className="w-12 h-12 mb-2 opacity-50" />
+                        <p>No price data available for visualization</p>
+                      </div>
+                    )}
                   </div>
                 </CardContent>
               </Card>
+
+              {/* Equity Curve Chart */}
+              <Card className="panel" data-testid="equity-chart">
+                <CardHeader className="panel-header py-3">
+                  <CardTitle className="panel-title text-base font-medium flex items-center">
+                    <Activity className="w-4 h-4 mr-2" />
+                    Portfolio Equity Growth
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-4 pt-2">
+                  <div className="w-full h-[200px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={currentResult.price_data}>
+                        <defs>
+                          <linearGradient id="colorEquity" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#ec4899" stopOpacity={0.3} />
+                            <stop offset="95%" stopColor="#ec4899" stopOpacity={0} />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#262626" vertical={false} />
+                        <XAxis
+                          dataKey="time"
+                          hide={true}
+                        />
+                        <YAxis
+                          domain={['auto', 'auto']}
+                          stroke="#525252"
+                          tick={{ fill: '#a3a3a3', fontSize: 10 }}
+                          axisLine={false}
+                          tickLine={false}
+                          tickFormatter={(val) => `$${val.toLocaleString()}`}
+                        />
+                        <Tooltip
+                          contentStyle={{
+                            background: '#0a0a0a',
+                            border: '1px solid #262626',
+                            borderRadius: '8px',
+                            color: '#f5f5f5'
+                          }}
+                          formatter={(value) => [`$${value.toLocaleString()}`, 'Equity']}
+                        />
+                        <Area
+                          type="monotone"
+                          dataKey={(obj) => {
+                            const ret = currentResult?.total_return || 0;
+                            return ret * 100 + 10000;
+                          }}
+                          stroke="#ec4899"
+                          fillOpacity={1}
+                          fill="url(#colorEquity)"
+                          isAnimationActive={false}
+                        />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Trade List */}
 
               {/* Trade List */}
               <Card className="panel" data-testid="trade-list">
@@ -394,19 +529,19 @@ const Backtesting = () => {
                               {trade.time}
                             </TableCell>
                             <TableCell className="font-mono text-right">
-                              ${trade.price.toFixed(2)}
+                              ${(trade.price || 0).toFixed(2)}
                             </TableCell>
                             <TableCell className="font-mono text-right">
-                              {trade.shares.toFixed(4)}
+                              {(trade.shares || 0).toFixed(4)}
                             </TableCell>
                             <TableCell className="font-mono text-right">
-                              ${trade.value.toFixed(2)}
+                              ${(trade.value || 0).toFixed(2)}
                             </TableCell>
-                            <TableCell className={`font-mono text-right ${trade.pnl > 0 ? 'trading-positive' :
-                              trade.pnl < 0 ? 'trading-negative' : ''
+                            <TableCell className={`font-mono text-right ${(trade.pnl || 0) > 0 ? 'trading-positive' :
+                              (trade.pnl || 0) < 0 ? 'trading-negative' : ''
                               }`}>
                               {trade.pnl !== undefined ?
-                                `${trade.pnl >= 0 ? '+' : ''}$${trade.pnl.toFixed(2)}` : '-'}
+                                `${(trade.pnl || 0) >= 0 ? '+' : ''}$${(trade.pnl || 0).toFixed(2)}` : '-'}
                             </TableCell>
                           </TableRow>
                         ))}

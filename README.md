@@ -13,3 +13,5 @@
 # the "model_py" commit has divided the models into .py files and made them downloadable so that they can be edited or customised.
 
 # the "bck_tst_1" commit has added backtesting functionality to the backtesting page. But, it is not saving the model name while training, and the backtesting page is not loading the charts to show the executions.
+
+# the "bck_tst_2" commit has fixed the issue of the backtesting page not loading the charts to show the executions. But, it is laggy and showing the pre determined values to test.
