@@ -14,7 +14,9 @@ import {
   Loader2,
   BarChart3,
   Target,
-  Activity
+  Activity,
+  Maximize,
+  Minimize
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -50,7 +52,8 @@ import {
   Cell,
   AreaChart,
   Area,
-  Legend
+  Legend,
+  ReferenceArea
 } from "recharts";
 
 const Backtesting = () => {
@@ -66,8 +69,35 @@ const Backtesting = () => {
     test_data_path: "",
     initial_capital: 10000,
     position_size: 0.1,
-    target_candle: 1
+    target_candle: 1,
+    rr_ratio: null,
+    commission_fee: 0
   });
+
+  const [isFullScreen, setIsFullScreen] = useState(false);
+  const chartRef = useRef(null);
+
+  const toggleFullScreen = () => {
+    if (!chartRef.current) return;
+
+    if (!document.fullscreenElement) {
+      if (chartRef.current.requestFullscreen) {
+        chartRef.current.requestFullscreen();
+      }
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+      }
+    }
+  };
+
+  useEffect(() => {
+    const handleFullScreenChange = () => {
+      setIsFullScreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullScreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullScreenChange);
+  }, []);
 
   const [selectedModel, setSelectedModel] = useState(null);
   const [availableColumns, setAvailableColumns] = useState([]);
@@ -141,9 +171,17 @@ const Backtesting = () => {
     if (!currentResult?.price_data) return [];
     if (currentResult.price_data.length <= 1000) return currentResult.price_data;
 
-    // Sample 1000 points for performance
+    // Sample 1000 points for performance, but always include first and last
     const step = Math.ceil(currentResult.price_data.length / 1000);
-    return currentResult.price_data.filter((_, i) => i % step === 0);
+    const sampled = currentResult.price_data.filter((_, i) => i % step === 0);
+
+    // Ensure the last record is always present
+    const lastRecord = currentResult.price_data[currentResult.price_data.length - 1];
+    if (sampled[sampled.length - 1] !== lastRecord) {
+      sampled.push(lastRecord);
+    }
+
+    return sampled;
   }, [currentResult]);
 
   const displayTrades = useMemo(() => {
@@ -151,6 +189,31 @@ const Backtesting = () => {
     // Only show trades that exist within the sampled time points or just show all if not too many
     return currentResult.trades;
   }, [currentResult]);
+
+  const sessionSpans = useMemo(() => {
+    if (!displayData || displayData.length === 0) return [];
+    const spans = [];
+    let start = null;
+
+    displayData.forEach((d, i) => {
+      if (d.is_market_hours) {
+        if (start === null) {
+          start = d.time;
+        }
+      } else {
+        if (start !== null) {
+          spans.push({ start, end: displayData[i - 1]?.time || d.time });
+          start = null;
+        }
+      }
+    });
+
+    if (start !== null) {
+      spans.push({ start, end: displayData[displayData.length - 1]?.time });
+    }
+
+    return spans;
+  }, [displayData]);
 
   const MetricCard = ({ title, value, icon: Icon, positive, subtitle }) => (
     <div className="stat-card">
@@ -308,6 +371,33 @@ const Backtesting = () => {
               </p>
             </div>
 
+            {/* Risk to Reward Ratio */}
+            <div className="space-y-2">
+              <Label>Risk to Reward Ratio (Optional)</Label>
+              <Select
+                value={config.rr_ratio === null ? "none" : config.rr_ratio.toString()}
+                onValueChange={(v) => setConfig({ ...config, rr_ratio: v === "none" ? null : parseFloat(v) })}
+              >
+                <SelectTrigger data-testid="rr-ratio-select">
+                  <SelectValue placeholder="Disabled" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Disabled (Candle Target)</SelectItem>
+                  <SelectItem value="1">1:1</SelectItem>
+                  <SelectItem value="1.5">1:1.5</SelectItem>
+                  <SelectItem value="2">1:2</SelectItem>
+                  <SelectItem value="3">1:3</SelectItem>
+                  <SelectItem value="4">1:4</SelectItem>
+                  <SelectItem value="5">1:5</SelectItem>
+                </SelectContent>
+              </Select>
+              {config.rr_ratio !== null && (
+                <p className="text-xs text-muted-foreground">
+                  Holds position until TP or SL (1% risk) is hit
+                </p>
+              )}
+            </div>
+
             <div className="space-y-2">
               <Label>Initial Capital</Label>
               <Input
@@ -328,6 +418,17 @@ const Backtesting = () => {
                 value={config.position_size}
                 onChange={(e) => setConfig({ ...config, position_size: parseFloat(e.target.value) })}
                 data-testid="position-size-input"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Execution Fee ($ per trade)</Label>
+              <Input
+                type="number"
+                step="0.01"
+                min="0"
+                value={config.commission_fee}
+                onChange={(e) => setConfig({ ...config, commission_fee: parseFloat(e.target.value) || 0 })}
+                data-testid="commission-fee-input"
               />
             </div>
           </CardContent>
@@ -366,15 +467,24 @@ const Backtesting = () => {
               </div>
 
               {/* Price Action Chart */}
-              <Card className="panel" data-testid="price-chart">
-                <CardHeader className="panel-header py-3">
-                  <CardTitle className="panel-title text-base font-medium flex items-center">
+              <Card
+                className={`panel ${isFullScreen ? 'bg-background p-6 overflow-auto' : ''}`}
+                data-testid="price-chart"
+                ref={chartRef}
+              >
+                <CardHeader className="panel-header py-3 flex flex-row items-center justify-between">
+                  <div className="flex items-center">
                     <LineChartIcon className="w-4 h-4 mr-2" />
-                    Price Action & Signal Markers
-                  </CardTitle>
+                    <CardTitle className="panel-title text-base font-medium">
+                      Price Action & Signal Markers
+                    </CardTitle>
+                  </div>
+                  <Button variant="ghost" size="icon" onClick={toggleFullScreen} className="h-8 w-8">
+                    {isFullScreen ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />}
+                  </Button>
                 </CardHeader>
-                <CardContent className="p-4 pt-2">
-                  <div className="w-full h-[350px]">
+                <CardContent className={`p-4 pt-2 ${isFullScreen ? 'h-[calc(100vh-120px)] flex flex-col overflow-auto' : ''}`}>
+                  <div className={`w-full ${isFullScreen ? 'h-[500px] flex-shrink-0' : 'h-[350px]'}`}>
                     {displayData.length > 0 ? (
                       <ResponsiveContainer width="100%" height="100%">
                         <ComposedChart data={displayData}>
@@ -411,6 +521,19 @@ const Backtesting = () => {
                             }}
                           />
                           <Legend verticalAlign="top" height={36} iconType="circle" />
+
+                          {/* Session Highlighting */}
+                          {sessionSpans.map((span, idx) => (
+                            <ReferenceArea
+                              key={idx}
+                              x1={span.start}
+                              x2={span.end}
+                              fill="#ffffff"
+                              fillOpacity={0.06}
+                              strokeOpacity={0}
+                            />
+                          ))}
+
                           <Area
                             type="linear"
                             dataKey="close"
@@ -421,28 +544,6 @@ const Backtesting = () => {
                             name="Price"
                             isAnimationActive={false}
                           />
-                          {/* BUY Markers */}
-                          <Scatter
-                            name="BUY Order"
-                            data={displayTrades.filter(t => t.type === 'BUY')}
-                            dataKey="price"
-                            fill="#22c55e"
-                          >
-                            {displayTrades.filter(t => t.type === 'BUY').map((entry, index) => (
-                              <Cell key={`buy-${index}`} fill="#22c55e" stroke="#fff" strokeWidth={0.5} r={1.5} />
-                            ))}
-                          </Scatter>
-                          {/* SELL Markers */}
-                          <Scatter
-                            name="SELL Order"
-                            data={displayTrades.filter(t => t.type === 'SELL')}
-                            dataKey="price"
-                            fill="#ef4444"
-                          >
-                            {displayTrades.filter(t => t.type === 'SELL').map((entry, index) => (
-                              <Cell key={`sell-${index}`} fill="#ef4444" stroke="#fff" strokeWidth={0.5} r={1.5} />
-                            ))}
-                          </Scatter>
                         </ComposedChart>
                       </ResponsiveContainer>
                     ) : (
@@ -452,6 +553,53 @@ const Backtesting = () => {
                       </div>
                     )}
                   </div>
+
+                  {isFullScreen && (
+                    <div className="w-full h-[250px] mt-8 flex-shrink-0">
+                      <div className="flex items-center mb-4">
+                        <Activity className="w-4 h-4 mr-2 text-pink-500" />
+                        <span className="text-sm font-medium">Portfolio Equity Growth</span>
+                      </div>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={displayData}>
+                          <defs>
+                            <linearGradient id="colorEquityFull" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="5%" stopColor="#ec4899" stopOpacity={0.3} />
+                              <stop offset="95%" stopColor="#ec4899" stopOpacity={0} />
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#262626" vertical={false} />
+                          <XAxis dataKey="time" hide={true} />
+                          <YAxis
+                            domain={['auto', 'auto']}
+                            stroke="#525252"
+                            tick={{ fill: '#a3a3a3', fontSize: 10 }}
+                            axisLine={false}
+                            tickLine={false}
+                            tickFormatter={(val) => `$${val.toLocaleString()}`}
+                            width={80}
+                          />
+                          <Tooltip
+                            contentStyle={{
+                              background: '#0a0a0a',
+                              border: '1px solid #262626',
+                              borderRadius: '8px',
+                              color: '#f5f5f5'
+                            }}
+                          />
+                          <Area
+                            type="monotone"
+                            dataKey="equity"
+                            stroke="#ec4899"
+                            fillOpacity={1}
+                            fill="url(#colorEquityFull)"
+                            name="Equity"
+                            isAnimationActive={false}
+                          />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
@@ -485,6 +633,7 @@ const Backtesting = () => {
                           axisLine={false}
                           tickLine={false}
                           tickFormatter={(val) => `$${val.toLocaleString()}`}
+                          width={80}
                         />
                         <Tooltip
                           contentStyle={{
@@ -527,38 +676,56 @@ const Backtesting = () => {
                           <TableHead className="text-right">Price</TableHead>
                           <TableHead className="text-right">Shares</TableHead>
                           <TableHead className="text-right">Value</TableHead>
+                          <TableHead className="text-right">Fee</TableHead>
                           <TableHead className="text-right">P&L</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {currentResult.trades?.map((trade, i) => (
-                          <TableRow key={i}>
-                            <TableCell>
-                              <span className={`badge ${trade.type === 'BUY' ? 'status-running' : 'status-failed'
-                                }`}>
-                                {trade.type}
-                              </span>
-                            </TableCell>
-                            <TableCell className="font-mono text-xs">
-                              {trade.time}
-                            </TableCell>
-                            <TableCell className="font-mono text-right">
-                              ${(trade.price || 0).toFixed(2)}
-                            </TableCell>
-                            <TableCell className="font-mono text-right">
-                              {(trade.shares || 0).toFixed(4)}
-                            </TableCell>
-                            <TableCell className="font-mono text-right">
-                              ${(trade.value || 0).toFixed(2)}
-                            </TableCell>
-                            <TableCell className={`font-mono text-right ${(trade.pnl || 0) > 0 ? 'trading-positive' :
-                              (trade.pnl || 0) < 0 ? 'trading-negative' : ''
-                              }`}>
-                              {trade.pnl !== undefined ?
-                                `${(trade.pnl || 0) >= 0 ? '+' : ''}$${(trade.pnl || 0).toFixed(2)}` : '-'}
-                            </TableCell>
-                          </TableRow>
-                        ))}
+                        {(() => {
+                          let currentGroupIndex = 0;
+                          return currentResult.trades?.map((trade, i) => {
+                            // Increment group index for every new BUY
+                            if (trade.type === 'BUY' && i > 0) {
+                              currentGroupIndex++;
+                            }
+
+                            const isAlternate = currentGroupIndex % 2 === 1;
+
+                            return (
+                              <TableRow
+                                key={i}
+                                className={isAlternate ? "bg-muted/10" : ""}
+                              >
+                                <TableCell>
+                                  <span className={`badge ${trade.type === 'BUY' ? 'status-running' : 'status-failed'}`}>
+                                    {trade.type}
+                                  </span>
+                                </TableCell>
+                                <TableCell className="font-mono text-xs">
+                                  {trade.time}
+                                </TableCell>
+                                <TableCell className="font-mono text-right">
+                                  ${(trade.price || 0).toFixed(2)}
+                                </TableCell>
+                                <TableCell className="font-mono text-right">
+                                  {Math.round(trade.shares || 0)}
+                                </TableCell>
+                                <TableCell className="font-mono text-right">
+                                  ${(trade.value || 0).toFixed(2)}
+                                </TableCell>
+                                <TableCell className="font-mono text-right text-muted-foreground">
+                                  ${(trade.fee || 0).toFixed(2)}
+                                </TableCell>
+                                <TableCell className={`font-mono text-right ${(trade.pnl || 0) > 0 ? 'trading-positive' :
+                                  (trade.pnl || 0) < 0 ? 'trading-negative' : ''
+                                  }`}>
+                                  {trade.pnl !== undefined ?
+                                    `${(trade.pnl || 0) >= 0 ? '+' : ''}$${(trade.pnl || 0).toFixed(2)}` : '-'}
+                                </TableCell>
+                              </TableRow>
+                            );
+                          });
+                        })()}
                       </TableBody>
                     </Table>
                   </ScrollArea>
@@ -576,7 +743,7 @@ const Backtesting = () => {
           )}
         </div>
       </div>
-    </div>
+    </div >
   );
 };
 

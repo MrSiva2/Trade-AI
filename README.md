@@ -29,3 +29,6 @@
 
 # the "bck_tst_3" commit has fixed the issue of rendering the wrong price on chart.
 
+# the "bck_tst_4" commit has made these:
+#   1. Risk Reward ratio 
+#   2. Taking trades only during market hours

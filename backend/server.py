@@ -127,6 +127,8 @@ class BacktestRequest(BaseModel):
     initial_capital: float = 10000.0
     position_size: float = 0.1
     target_candle: int = 1  # Which candle ahead to target (1st, 2nd, 3rd, etc.)
+    rr_ratio: Optional[float] = None  # Optional Risk-to-Reward Ratio
+    commission_fee: float = 0.0  # Fixed fee per trade
     # target_column and feature_columns will come from the model file
 
 class TrainingSession(BaseModel):
@@ -1254,24 +1256,170 @@ async def run_backtest(request: BacktestRequest):
             highs = closes * 1.005
             lows = closes * 0.995
         
-        # Capture date column for timestamp
+        # Prepare timestamps for visualization and market hour checking
+        timestamps = []
+        dt_timestamps = None
+        
         if col_date:
-            timestamps = df[col_date].astype(str).values
+            try:
+                # Use mixed format for flexibility
+                dt_series = pd.to_datetime(df[col_date], format='mixed', errors='coerce')
+                dt_timestamps = dt_series
+                
+                # Create string versions, falling back to original string for unparseable dates
+                formatted_dates = dt_series.dt.strftime('%Y-%m-%d %H:%M:%S')
+                orig_strings = df[col_date].astype(str).values
+                
+                timestamps = [
+                    formatted_dates.iloc[i] if pd.notnull(formatted_dates.iloc[i]) else orig_strings[i]
+                    for i in range(len(df))
+                ]
+            except Exception as e:
+                logger.warning(f"Failed to parse date column: {e}. Falling back to strings.")
+                timestamps = df[col_date].astype(str).values
         else:
             timestamps = [f"Point_{i}" for i in range(len(df))]
-        
-        # Simulate trading with candle targeting
+
+        # Simulate trading with candle targeting or RR ratio
         capital = request.initial_capital
         position = 0
         trades = []
         equity_curve = [capital]
         target_candle = max(1, min(request.target_candle, 10))  # Limit to 1-10 candles
         
+        # Risk management parameters
+        rr_ratio = request.rr_ratio
+        current_tp = None
+        current_sl = None
+        
         price_data = []
         for i in range(len(df)):
             timestamp = timestamps[i]
             pred = predictions[i]
             prob = probabilities[i]
+            
+            # Check for market hours (09:30 - 16:00)
+            is_market_hours = True
+            if dt_timestamps is not None:
+                try:
+                    current_dt = dt_timestamps.iloc[i]
+                    # Ensure current_dt is a timestamp object with time
+                    if hasattr(current_dt, 'hour'):
+                        market_start = current_dt.replace(hour=9, minute=30, second=0, microsecond=0)
+                        market_end = current_dt.replace(hour=16, minute=0, second=0, microsecond=0)
+                        is_market_hours = (current_dt >= market_start) and (current_dt <= market_end)
+                    else:
+                        is_market_hours = True
+                except Exception as e:
+                    is_market_hours = True
+
+            # Trading logic with candle targeting or RR
+            # Only enter if within market hours
+            if pred == 1 and position == 0 and i < len(df) - 1 and is_market_hours:  # Buy signal
+                entry_price = closes[i]
+                target_position_size = capital * request.position_size
+                
+                # Round shares to whole number
+                shares = round(target_position_size / entry_price)
+                
+                if shares > 0:
+                    actual_cost = shares * entry_price
+                    # Add commission on buy
+                    total_entry_cost = actual_cost + request.commission_fee
+                    
+                    if total_entry_cost <= capital:
+                        position = shares
+                        capital -= total_entry_cost
+                        
+                        trade_info = {
+                            "type": "BUY",
+                            "time": timestamp,
+                            "price": float(entry_price),
+                            "shares": int(shares),
+                            "value": float(actual_cost),
+                            "fee": float(request.commission_fee),
+                            "probability": float(prob),
+                        }
+
+                        if rr_ratio:
+                            # Use a default risk of 1% for SL
+                            risk_pct = 0.01 
+                            current_sl = entry_price * (1 - risk_pct)
+                            current_tp = entry_price + (entry_price - current_sl) * rr_ratio
+                            trade_info["tp"] = float(current_tp)
+                            trade_info["sl"] = float(current_sl)
+                        else:
+                            # Original logic: Exit after N candles
+                            target_idx = min(i + target_candle, len(df) - 1)
+                            trade_info["target_candle"] = target_candle
+                            trade_info["target_idx"] = target_idx
+                            current_tp = None
+                            current_sl = None
+                        
+                        trades.append(trade_info)
+                
+            elif position > 0:
+                last_buy = [t for t in trades if t["type"] == "BUY"][-1]
+                exit_signal = False
+                exit_price = closes[i]
+                is_hit = False
+
+                if rr_ratio:
+                    # RR Logic: Close on TP or SL hit
+                    if highs[i] >= current_tp:
+                        exit_signal = True
+                        exit_price = current_tp
+                        is_hit = True
+                    elif lows[i] <= current_sl:
+                        exit_signal = True
+                        exit_price = current_sl
+                        is_hit = False
+                    # Force close on last candle if still open
+                    elif i == len(df) - 1:
+                        exit_signal = True
+                        exit_price = closes[i]
+                        is_hit = False
+                else:
+                    # Original logic: Exit at target candle
+                    if i >= last_buy.get("target_idx", i + 1):
+                        exit_signal = True
+                        exit_price = closes[i]
+                        is_hit = True
+                    # Force close on last candle if still open
+                    elif i == len(df) - 1:
+                        exit_signal = True
+                        exit_price = closes[i]
+                        is_hit = False
+                
+                if exit_signal:
+                    gross_value = position * exit_price
+                    # Subtract commission on sell
+                    net_value = gross_value - request.commission_fee
+                    capital += net_value
+                    
+                    # P&L is net proceeds - (original cost + buy fee)
+                    pnl = net_value - (last_buy["value"] + last_buy["fee"])
+                    
+                    trades.append({
+                        "type": "SELL",
+                        "time": timestamp,
+                        "price": float(exit_price),
+                        "shares": int(position),
+                        "value": float(gross_value),
+                        "fee": float(request.commission_fee),
+                        "pnl": float(pnl),
+                        "probability": float(prob),
+                        "is_hit": is_hit
+                    })
+                    position = 0
+                    current_tp = None
+                    current_sl = None
+
+            # Track equity
+            # Account for unrealized exit fee when position is open for a smoother curve
+            exit_fee_allowance = request.commission_fee if position > 0 else 0
+            current_equity = capital + (position * closes[i] if position > 0 else 0) - exit_fee_allowance
+            equity_curve.append(current_equity)
             
             price_data.append({
                 "time": timestamp,
@@ -1280,67 +1428,12 @@ async def run_backtest(request: BacktestRequest):
                 "low": float(lows[i]),
                 "close": float(closes[i]),
                 "prediction": int(pred),
-                "probability": float(prob)
+                "probability": float(prob),
+                "equity": float(current_equity),
+                "tp": float(current_tp) if current_tp else None,
+                "sl": float(current_sl) if current_sl else None,
+                "is_market_hours": is_market_hours
             })
-            
-            # Trading logic with candle targeting
-            if pred == 1 and position == 0 and i + target_candle < len(df):  # Buy signal
-                # Check if we can look ahead to target candle
-                target_idx = i + target_candle
-                target_high = highs[target_idx]
-                target_low = lows[target_idx]
-                entry_price = closes[i]
-                
-                # Calculate if target price would be hit (between high and low of target candle)
-                # For simplicity, we use the close of target candle as the exit
-                exit_price = closes[target_idx]
-                
-                position_size = capital * request.position_size
-                shares = position_size / entry_price
-                position = shares
-                capital -= position_size
-                
-                trades.append({
-                    "type": "BUY",
-                    "time": timestamp,
-                    "price": float(entry_price),
-                    "shares": float(shares),
-                    "value": float(position_size),
-                    "probability": float(prob),
-                    "target_candle": target_candle,
-                    "target_idx": target_idx
-                })
-            elif position > 0 and trades:  # Check if we reached target candle
-                last_trade = trades[-1]
-                if i >= last_trade.get("target_idx", i + 1):
-                    # Exit at target candle
-                    exit_price = closes[i]
-                    value = position * exit_price
-                    capital += value
-                    pnl = value - last_trade["value"]
-                    
-                    # Check if it was a hit (price within target candle's range)
-                    target_idx = last_trade.get("target_idx", i)
-                    is_hit = True  # Within high-low range by default
-                    
-                    trades.append({
-                        "type": "SELL",
-                        "time": timestamp,
-                        "price": float(exit_price),
-                        "shares": float(position),
-                        "value": float(value),
-                        "pnl": float(pnl),
-                        "probability": float(prob),
-                        "is_hit": is_hit
-                    })
-                    position = 0
-            
-            # Track equity
-            current_equity = capital + (position * closes[i] if position > 0 else 0)
-            equity_curve.append(current_equity)
-            
-            # Update price_data with current equity
-            price_data[i]["equity"] = float(current_equity)
         
         # Calculate metrics
         total_return = (equity_curve[-1] - request.initial_capital) / request.initial_capital * 100
