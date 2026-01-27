@@ -5,7 +5,7 @@
 # 4. Any background processes (ie. training, backtesting) should not be paused or interrupted when opening other pages. Once the background process is completed, it should show a message pop up to notify the user, and the data should be cached.
 # 5. The backtesteed data should be saved after the user clicks a save data button, and the data should be reflected on the dashboard.
 # 6. Fixing the issue of model's name, where it is different form the name it is assigned when in training page.
-
+# 7. Fix PnL(Equity) curve on the backtesting page.
 
 
 
@@ -32,3 +32,6 @@
 # the "bck_tst_4" commit has made these:
 #   1. Risk Reward ratio 
 #   2. Taking trades only during market hours
+
+
+# the "bck_tst_5_blank" has just addressed the position sizing i.e. the position sizes will be whole numbers.
