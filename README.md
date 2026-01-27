@@ -6,7 +6,7 @@
 # 5. The backtesteed data should be saved after the user clicks a save data button, and the data should be reflected on the dashboard.
 # 6. Fixing the issue of model's name, where it is different form the name it is assigned when in training page.
 # 7. Fix PnL(Equity) curve on the backtesting page.
-
+# 8. Make the database work. so that all the data related to models and backtesting can be saved there instead of a file in the models folder.
 
 
 # Here are your Instructions
