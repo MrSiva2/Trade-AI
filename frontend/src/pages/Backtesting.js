@@ -71,7 +71,12 @@ const Backtesting = () => {
     position_size: 0.1,
     target_candle: 1,
     rr_ratio: null,
-    commission_fee: 0
+    commission_fee: 0,
+    time_range_start: "",
+    time_range_end: "",
+    tick_size: 0.25,
+    tick_value: 0.5,
+    use_risk_based_sizing: false
   });
 
   const [isFullScreen, setIsFullScreen] = useState(false);
@@ -155,7 +160,13 @@ const Backtesting = () => {
 
     setRunning(true);
     try {
-      const response = await axios.post(`${API}/backtest/run`, config);
+      const payload = {
+        ...config,
+        time_range_start: config.time_range_start?.trim() || null,
+        time_range_end: config.time_range_end?.trim() || null,
+        rr_ratio: config.rr_ratio ?? null
+      };
+      const response = await axios.post(`${API}/backtest/run`, payload);
       setCurrentResult(response.data);
       setResults(prev => [response.data, ...prev]);
       toast.success("Backtest completed");
@@ -347,6 +358,67 @@ const Backtesting = () => {
               </Select>
             </div>
 
+            {/* Trading time range (optional) */}
+            <div className="space-y-2">
+              <Label>Trading time range (optional)</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label className="text-xs text-muted-foreground">Start</Label>
+                  <Input
+                    type="text"
+                    placeholder="09:30"
+                    value={config.time_range_start}
+                    onChange={(e) => setConfig({ ...config, time_range_start: e.target.value })}
+                    data-testid="time-range-start"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">End</Label>
+                  <Input
+                    type="text"
+                    placeholder="16:00"
+                    value={config.time_range_end}
+                    onChange={(e) => setConfig({ ...config, time_range_end: e.target.value })}
+                    data-testid="time-range-end"
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Only execute trades within this time window (HH:MM or HH:MM:SS). Leave empty for full session.
+              </p>
+            </div>
+
+            {/* Tick size & value */}
+            <div className="space-y-2">
+              <Label>Tick</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label className="text-xs text-muted-foreground">Tick size ($)</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={config.tick_size}
+                    onChange={(e) => setConfig({ ...config, tick_size: parseFloat(e.target.value) || 0.25 })}
+                    data-testid="tick-size-input"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Tick value ($/tick)</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={config.tick_value}
+                    onChange={(e) => setConfig({ ...config, tick_value: parseFloat(e.target.value) || 0.5 })}
+                    data-testid="tick-value-input"
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                e.g. tick size $0.25, tick value $0.5 per tick per contract
+              </p>
+            </div>
 
             {/* Trading Parameters */}
             <div className="space-y-2">
@@ -399,7 +471,7 @@ const Backtesting = () => {
             </div>
 
             <div className="space-y-2">
-              <Label>Initial Capital</Label>
+              <Label>Initial Capital ($)</Label>
               <Input
                 type="number"
                 value={config.initial_capital}
@@ -409,16 +481,43 @@ const Backtesting = () => {
             </div>
 
             <div className="space-y-2">
-              <Label>Position Size (%)</Label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="use-risk-sizing"
+                  checked={config.use_risk_based_sizing}
+                  onChange={(e) => setConfig({ ...config, use_risk_based_sizing: e.target.checked })}
+                  data-testid="use-risk-based-sizing"
+                  className="rounded border-input"
+                />
+                <Label htmlFor="use-risk-sizing" className="cursor-pointer">Use risk-based position sizing</Label>
+              </div>
+              {config.use_risk_based_sizing && (
+                <p className="text-xs text-muted-foreground">
+                  Position size is computed so max loss per trade = risk % of account. Requires Risk-to-Reward ratio and tick values.
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label>{config.use_risk_based_sizing ? "Risk per trade (%)" : "Position size (fraction)"}</Label>
               <Input
                 type="number"
-                step="0.01"
-                min="0.01"
-                max="1"
+                step={config.use_risk_based_sizing ? "0.01" : "0.01"}
+                min={config.use_risk_based_sizing ? "0.01" : "0.01"}
+                max={config.use_risk_based_sizing ? "100" : "1"}
                 value={config.position_size}
                 onChange={(e) => setConfig({ ...config, position_size: parseFloat(e.target.value) })}
                 data-testid="position-size-input"
               />
+              {config.use_risk_based_sizing && config.rr_ratio != null && (
+                <p className="text-xs text-muted-foreground">
+                  Max loss per trade: ${((config.initial_capital * (config.position_size / 100)) || 0).toFixed(0)} — position closes at this loss or at RR target.
+                </p>
+              )}
+              {!config.use_risk_based_sizing && (
+                <p className="text-xs text-muted-foreground">Fraction of capital per trade (e.g. 0.1 = 10%)</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label>Execution Fee ($ per trade)</Label>

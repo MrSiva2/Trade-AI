@@ -9,7 +9,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Dict, Any
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, time as dt_time
 import pandas as pd
 import numpy as np
 import json
@@ -125,10 +125,18 @@ class BacktestRequest(BaseModel):
     model_id: str
     test_data_path: str
     initial_capital: float = 10000.0
-    position_size: float = 0.1
+    position_size: float = 0.1  # Fraction of capital (0.1 = 10%) or risk % when use_risk_based_sizing
     target_candle: int = 1  # Which candle ahead to target (1st, 2nd, 3rd, etc.)
     rr_ratio: Optional[float] = None  # Optional Risk-to-Reward Ratio
     commission_fee: float = 0.0  # Fixed fee per trade
+    # Time range for trade execution (only enter/exit within this window). Format "HH:MM" or "HH:MM:SS"
+    time_range_start: Optional[str] = None  # e.g. "09:30"
+    time_range_end: Optional[str] = None    # e.g. "16:00"
+    # Tick: price increment and dollar value per tick (e.g. tick_size=0.25, tick_value=0.5)
+    tick_size: float = 0.25   # Price increment per tick
+    tick_value: float = 0.5    # Dollar value per tick per contract
+    # When True and rr_ratio is set: position_size is risk % (e.g. 0.5 = 0.5%); close on max loss or RR target
+    use_risk_based_sizing: bool = False
     # target_column and feature_columns will come from the model file
 
 class TrainingSession(BaseModel):
@@ -1280,6 +1288,40 @@ async def run_backtest(request: BacktestRequest):
         else:
             timestamps = [f"Point_{i}" for i in range(len(df))]
 
+        # Parse optional time range for trade execution (start/end of day window)
+        def parse_time_range(s: Optional[str]):
+            if not s or not s.strip():
+                return None
+            parts = s.strip().split(":")
+            if len(parts) >= 2:
+                try:
+                    h, m = int(parts[0]), int(parts[1])
+                    sec = int(parts[2]) if len(parts) >= 3 else 0
+                    return (h, m, sec)
+                except ValueError:
+                    pass
+            return None
+
+        time_start = parse_time_range(request.time_range_start)
+        time_end = parse_time_range(request.time_range_end)
+
+        def is_in_time_range(dt) -> bool:
+            if dt_timestamps is None or not hasattr(dt, 'hour'):
+                return True
+            if time_start is None and time_end is None:
+                return True
+            t = dt.time() if hasattr(dt, 'time') else dt_time(dt.hour, dt.minute, getattr(dt, 'second', 0))
+            if time_start is not None:
+                start_t = dt_time(time_start[0], time_start[1], time_start[2])
+                if time_end is not None:
+                    end_t = dt_time(time_end[0], time_end[1], time_end[2])
+                    return start_t <= t <= end_t
+                return t >= start_t
+            if time_end is not None:
+                end_t = dt_time(time_end[0], time_end[1], time_end[2])
+                return t <= end_t
+            return True
+
         # Simulate trading with candle targeting or RR ratio
         capital = request.initial_capital
         position = 0
@@ -1291,6 +1333,10 @@ async def run_backtest(request: BacktestRequest):
         rr_ratio = request.rr_ratio
         current_tp = None
         current_sl = None
+        tick_size = max(1e-9, request.tick_size)
+        tick_value = max(0.0, request.tick_value)
+        use_tick_pnl = tick_size > 0 and tick_value > 0
+        use_risk_sizing = request.use_risk_based_sizing and rr_ratio is not None
         
         price_data = []
         for i in range(len(df)):
@@ -1298,33 +1344,44 @@ async def run_backtest(request: BacktestRequest):
             pred = predictions[i]
             prob = probabilities[i]
             
-            # Check for market hours (09:30 - 16:00)
+            # Check for market hours (09:30 - 16:00) or custom time range
             is_market_hours = True
             if dt_timestamps is not None:
                 try:
                     current_dt = dt_timestamps.iloc[i]
-                    # Ensure current_dt is a timestamp object with time
                     if hasattr(current_dt, 'hour'):
-                        market_start = current_dt.replace(hour=9, minute=30, second=0, microsecond=0)
-                        market_end = current_dt.replace(hour=16, minute=0, second=0, microsecond=0)
-                        is_market_hours = (current_dt >= market_start) and (current_dt <= market_end)
+                        if time_start is not None or time_end is not None:
+                            is_market_hours = is_in_time_range(current_dt)
+                        else:
+                            market_start = current_dt.replace(hour=9, minute=30, second=0, microsecond=0)
+                            market_end = current_dt.replace(hour=16, minute=0, second=0, microsecond=0)
+                            is_market_hours = (current_dt >= market_start) and (current_dt <= market_end)
                     else:
                         is_market_hours = True
-                except Exception as e:
+                except Exception:
                     is_market_hours = True
 
             # Trading logic with candle targeting or RR
-            # Only enter if within market hours
+            # Only enter if within allowed time window
             if pred == 1 and position == 0 and i < len(df) - 1 and is_market_hours:  # Buy signal
                 entry_price = closes[i]
-                target_position_size = capital * request.position_size
-                
-                # Round shares to whole number
-                shares = round(target_position_size / entry_price)
+                # Position size: risk-based (max loss % then size by tick) or fraction of capital
+                if use_risk_sizing and rr_ratio and use_tick_pnl:
+                    risk_pct = max(0.0001, min(1.0, request.position_size / 100.0))  # position_size = risk %
+                    max_loss_dollars = capital * risk_pct
+                    risk_pct_sl = 0.01  # 1% stop from entry
+                    current_sl = entry_price * (1 - risk_pct_sl)
+                    stop_distance = entry_price - current_sl
+                    stop_ticks = stop_distance / tick_size if tick_size else 1
+                    loss_per_contract = tick_value * stop_ticks
+                    shares = int(max_loss_dollars / loss_per_contract) if loss_per_contract > 0 else 0
+                    target_position_size = shares * entry_price  # for display
+                else:
+                    target_position_size = capital * request.position_size
+                    shares = round(target_position_size / entry_price)
                 
                 if shares > 0:
                     actual_cost = shares * entry_price
-                    # Add commission on buy
                     total_entry_cost = actual_cost + request.commission_fee
                     
                     if total_entry_cost <= capital:
@@ -1342,14 +1399,16 @@ async def run_backtest(request: BacktestRequest):
                         }
 
                         if rr_ratio:
-                            # Use a default risk of 1% for SL
-                            risk_pct = 0.01 
-                            current_sl = entry_price * (1 - risk_pct)
+                            if use_risk_sizing and use_tick_pnl:
+                                risk_pct_sl = 0.01
+                                current_sl = entry_price * (1 - risk_pct_sl)
+                            else:
+                                risk_pct_sl = 0.01
+                                current_sl = entry_price * (1 - risk_pct_sl)
                             current_tp = entry_price + (entry_price - current_sl) * rr_ratio
                             trade_info["tp"] = float(current_tp)
                             trade_info["sl"] = float(current_sl)
                         else:
-                            # Original logic: Exit after N candles
                             target_idx = min(i + target_candle, len(df) - 1)
                             trade_info["target_candle"] = target_candle
                             trade_info["target_idx"] = target_idx
@@ -1393,12 +1452,15 @@ async def run_backtest(request: BacktestRequest):
                 
                 if exit_signal:
                     gross_value = position * exit_price
-                    # Subtract commission on sell
-                    net_value = gross_value - request.commission_fee
-                    capital += net_value
-                    
-                    # P&L is net proceeds - (original cost + buy fee)
-                    pnl = net_value - (last_buy["value"] + last_buy["fee"])
+                    if use_tick_pnl:
+                        # P&L in dollars from tick value: (exit - entry) in ticks * tick_value * contracts
+                        pnl_dollars = position * (exit_price - last_buy["price"]) / tick_size * tick_value
+                        capital += last_buy["value"] + pnl_dollars - request.commission_fee
+                        pnl = pnl_dollars - request.commission_fee - last_buy["fee"]
+                    else:
+                        net_value = gross_value - request.commission_fee
+                        capital += net_value
+                        pnl = net_value - (last_buy["value"] + last_buy["fee"])
                     
                     trades.append({
                         "type": "SELL",

@@ -35,3 +35,5 @@
 
 
 # the "bck_tst_5_blank" has just addressed the position sizing i.e. the position sizes will be whole numbers.
+
+# the "tick sizing" has added an option to set the tick size and value.
